@@ -1,55 +1,41 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from typing import List
 from app.database import get_db
 from app.models import TravelType
-from app.schemas import TravelTypeOut, TravelTypeCreate, TravelTypeUpdate
-from app.dependencies import get_current_user, get_current_admin
-from app.utils.i18n import api_error
-from typing import List
+from app.schemas import TravelTypeCreate, TravelTypeResponse
+from app.dependencies import get_current_active_user, get_admin_user
 
-router = APIRouter(prefix="/travel-types", tags=["Travel Types"])
+router = APIRouter(prefix="/api/v1/travel-types", tags=["travel_types"])
 
-def localize(tt: TravelType, lang: str) -> TravelTypeOut:
-    name = getattr(tt, f"name_{lang}", tt.name_en) or tt.name_en
-    return TravelTypeOut(
-        id=tt.id, code=tt.code, name=name,
-        name_en=tt.name_en, name_fr=tt.name_fr, name_ar=tt.name_ar,
-        is_active=tt.is_active
-    )
-
-@router.get("", response_model=List[TravelTypeOut])
-async def list_travel_types(lang: str = "en", db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
+@router.get("/", response_model=List[TravelTypeResponse])
+async def list_travel_types(db: AsyncSession = Depends(get_db), current_user = Depends(get_current_active_user)):
     result = await db.execute(select(TravelType).where(TravelType.is_active == True))
-    items = result.scalars().all()
-    return [localize(i, lang if lang in ("en","fr","ar") else user.preferred_lang) for i in items]
+    return result.scalars().all()
 
-@router.post("", response_model=TravelTypeOut)
-async def create_travel_type(data: TravelTypeCreate, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
-    tt = TravelType(**data.model_dump())
-    db.add(tt)
+@router.post("/", response_model=TravelTypeResponse, status_code=201)
+async def create_travel_type(
+    travel_type: TravelTypeCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_admin_user)
+):
+    db_type = TravelType(**travel_type.dict())
+    db.add(db_type)
     await db.commit()
-    await db.refresh(tt)
-    return localize(tt, "en")
+    await db.refresh(db_type)
+    return db_type
 
-@router.patch("/{tid}", response_model=TravelTypeOut)
-async def update_travel_type(tid: int, data: TravelTypeUpdate, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
-    result = await db.execute(select(TravelType).where(TravelType.id == tid))
-    tt = result.scalar_one_or_none()
-    if not tt:
-        raise HTTPException(status_code=404, detail=api_error("not_found", "en"))
-    for k, v in data.model_dump(exclude_unset=True).items():
-        setattr(tt, k, v)
+@router.delete("/{type_id}", status_code=204)
+async def delete_travel_type(
+    type_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_admin_user)
+):
+    result = await db.execute(select(TravelType).where(TravelType.id == type_id))
+    travel_type = result.scalar_one_or_none()
+    if not travel_type:
+        raise HTTPException(status_code=404, detail="Travel type not found")
+    travel_type.is_active = False
     await db.commit()
-    await db.refresh(tt)
-    return localize(tt, "en")
-
-@router.delete("/{tid}")
-async def delete_travel_type(tid: int, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
-    result = await db.execute(select(TravelType).where(TravelType.id == tid))
-    tt = result.scalar_one_or_none()
-    if not tt:
-        raise HTTPException(status_code=404, detail=api_error("not_found", "en"))
-    tt.is_active = False
-    await db.commit()
-    return {"detail": "Deactivated"}
+    return

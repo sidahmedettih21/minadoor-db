@@ -56,24 +56,12 @@ function app() {
     stats: { total: 0, active: 0, byType: [] },
 
     async initApp() {
+      // Auth disabled – auto-login
+      this.isLoggedIn = true;
+      this.user = { id: 1, email: 'admin@minadoor.com', role: 'admin', full_name: 'Admin', preferred_lang: 'en' };
       await this.loadLocale();
-      const token = localStorage.getItem('access_token');
-      if (token) {
-        try {
-          const res = await this.api('/auth/me');
-          if (res.ok) {
-            this.user = await res.json();
-            this.isLoggedIn = true;
-            this.loadTravelTypes();
-            this.loadStats();
-            if (this.page === 'clients') this.loadClients();
-          } else {
-            this.logout();
-          }
-        } catch (e) {
-          this.logout();
-        }
-      }
+      await this.loadTravelTypes();
+      await this.loadClients();
     },
 
     async loadLocale() {
@@ -139,7 +127,7 @@ function app() {
       this.loading = true;
       this.loginError = '';
       try {
-        const res = await fetch('/api/v1/auth/login', {
+        const res = await fetch('/api/api/v1/auth/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(this.loginForm)
@@ -163,7 +151,7 @@ function app() {
     doLogout() {
       const rt = localStorage.getItem('refresh_token');
       if (rt) {
-        fetch('/api/v1/auth/logout', {
+        fetch('/api/api/v1/auth/logout', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ refresh_token: rt })
@@ -429,7 +417,7 @@ function app() {
             if (data.status === 'completed') {
               clearInterval(this.exportPolling);
               this.showToast(this.t('export_ready'), 'success');
-              window.open(`/api/v1/exports/${this.exportJobId}/download`, '_blank');
+              window.open(`/api/api/v1/exports/${this.exportJobId}/download`, '_blank');
             } else if (data.status === 'failed') {
               clearInterval(this.exportPolling);
               this.showToast(this.t('export_failed'), 'error');

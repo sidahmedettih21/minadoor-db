@@ -1,86 +1,61 @@
-from pydantic import BaseModel, EmailStr, Field, validator
-from typing import Optional, List, Dict, Any
+from pydantic import BaseModel, validator, EmailStr
+from typing import Optional, List
 from datetime import date, datetime
 import re
 
-# Auth
-class Token(BaseModel):
-    access_token: str
-    refresh_token: str
-    expires_in: int
-    token_type: str = "bearer"
-
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
-
-class RefreshRequest(BaseModel):
-    refresh_token: str
-
-class UserOut(BaseModel):
-    id: int
-    email: str
-    full_name: str
-    role: str
-    preferred_lang: str
-    is_active: bool
-    class Config:
-        from_attributes = True
-
 class UserCreate(BaseModel):
     email: EmailStr
-    password: str = Field(..., min_length=6)
-    full_name: str = Field(..., min_length=2, max_length=100)
+    password: str
+    full_name: str
     role: str = "agent"
-    preferred_lang: str = "en"
 
-class UserUpdate(BaseModel):
-    full_name: Optional[str] = None
-    role: Optional[str] = None
-    preferred_lang: Optional[str] = None
-    is_active: Optional[bool] = None
+    @validator("password")
+    def password_strength(cls, v):
+        if len(v) < 8:
+            raise ValueError("Password must be at least 8 characters")
+        if not re.search(r"[A-Z]", v):
+            raise ValueError("Must contain an uppercase letter")
+        if not re.search(r"[a-z]", v):
+            raise ValueError("Must contain a lowercase letter")
+        if not re.search(r"\d", v):
+            raise ValueError("Must contain a digit")
+        if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", v):
+            raise ValueError("Must contain a special character")
+        return v
 
-# Travel Types
-class TravelTypeOut(BaseModel):
-    id: int
-    code: str
-    name: str  # localized
-    name_en: str
-    name_fr: str
-    name_ar: str
-    is_active: bool
-    class Config:
-        from_attributes = True
-
-class TravelTypeCreate(BaseModel):
-    code: str = Field(..., max_length=30)
-    name_en: str = Field(..., max_length=100)
-    name_fr: str = Field(..., max_length=100)
-    name_ar: str = Field(..., max_length=100)
-
-class TravelTypeUpdate(BaseModel):
-    name_en: Optional[str] = None
-    name_fr: Optional[str] = None
-    name_ar: Optional[str] = None
-    is_active: Optional[bool] = None
-
-# Clients
 class ClientBase(BaseModel):
-    surname: str = Field(..., max_length=100)
-    given_name: str = Field(..., max_length=100)
-    father_name: str = Field(..., max_length=100)
-    mother_name: Optional[str] = Field(None, max_length=100)
-    passport_number: str = Field(..., max_length=30)
-    nationality: str = Field(..., max_length=50)
+    surname: str
+    given_name: str
+    father_name: str
+    mother_name: Optional[str] = None
+    passport_number: str
+    nationality: str
     date_of_birth: Optional[date] = None
     passport_issue_date: Optional[date] = None
     passport_expiry: Optional[date] = None
-    gender: Optional[str] = Field(None)
+    gender: Optional[str] = None
     travel_type_id: int
     payment_method: str = "cash"
     travel_date: date
-    status: str = "active"
     notes: Optional[str] = None
+
+    @validator("gender")
+    def validate_gender(cls, v):
+        if v and v.upper() not in ("M", "F"):
+            raise ValueError("Gender must be M or F")
+        return v.upper() if v else v
+
+    @validator("passport_expiry")
+    def expiry_after_issue(cls, v, values):
+        if v and values.get("passport_issue_date") and v < values["passport_issue_date"]:
+            raise ValueError("Expiry must be after issue date")
+        return v
+
+    @validator("travel_date")
+    def travel_not_past(cls, v):
+        if v < date.today():
+            raise ValueError("Travel date cannot be in the past")
+        return v
 
 class ClientCreate(ClientBase):
     pass
@@ -102,60 +77,46 @@ class ClientUpdate(BaseModel):
     status: Optional[str] = None
     notes: Optional[str] = None
 
-class ClientOut(ClientBase):
+class ClientResponse(ClientBase):
     id: int
-    created_by: Optional[int]
     created_at: datetime
     updated_at: datetime
+    created_by: Optional[int] = None
     archived: bool
-    travel_type: Optional[TravelTypeOut] = None
+
     class Config:
         from_attributes = True
 
-class ClientListResponse(BaseModel):
-    items: List[ClientOut]
-    total: int
-    page: int
-    limit: int
+class TravelTypeCreate(BaseModel):
+    code: str
+    name_en: str
+    name_fr: str
+    name_ar: str
 
-# Import
-class ImportError(BaseModel):
-    row: int
-    field: str
-    error: str
+class TravelTypeResponse(TravelTypeCreate):
+    id: int
+    is_active: bool
+
+class Token(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+
+class UserResponse(BaseModel):
+    id: int
+    email: str
+    full_name: str
+    role: str
+    preferred_lang: str
+    is_active: bool
 
 class ImportPreview(BaseModel):
     validation_id: str
     total_rows: int
     valid_rows: int
-    errors: List[ImportError]
-    preview_data: List[Dict[str, Any]]
-
-class ImportConfirm(BaseModel):
-    rows: List[Dict[str, Any]]
-
-class ImportResult(BaseModel):
-    imported_count: int
-    duplicates_skipped: int
-
-# Export
-class ExportRequest(BaseModel):
-    format: str = Field(..., pattern=r"^(xlsx|csv|pdf)$")
-    search: Optional[str] = None
-    travel_type: Optional[str] = None
-    status: Optional[str] = None
-    travel_date_from: Optional[date] = None
-    travel_date_to: Optional[date] = None
-    gender: Optional[str] = None
-    header_lang: str = "en"
+    errors: List[dict]
 
 class ExportStatus(BaseModel):
     job_id: str
-    status: str  # processing, completed, failed
-    download_url: Optional[str] = None
-
-# Health
-class HealthCheck(BaseModel):
     status: str
-    db: str
-    redis: str
+    download_url: Optional[str] = None

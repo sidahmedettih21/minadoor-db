@@ -1,68 +1,49 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database import get_db
 from app.models import User
-from app.schemas import LoginRequest, RefreshRequest, Token, UserOut
-from app.auth import verify_password, create_access_token, create_refresh_token, get_token_payload
-from app.dependencies import get_current_user, redis_client
-from app.utils.i18n import api_error
+from app.schemas import Token, UserResponse
+from app.auth import create_tokens, rotate_refresh_token, verify_password
+from app.dependencies import get_refresh_token_user, rate_limit, oauth2_scheme, get_current_active_user
 
-router = APIRouter(prefix="/auth", tags=["Auth"])
+router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 @router.post("/login", response_model=Token)
-async def login(req: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
-    # Rate limit check via Redis
-    ip = request.client.host
-    key = f"rate:login:{ip}"
-    current = redis_client.get(key)
-    if current and int(current) >= 5:
-        raise HTTPException(status_code=429, detail="Too many login attempts")
-    redis_client.incr(key)
-    redis_client.expire(key, 60)
-
-    result = await db.execute(select(User).where(User.email == req.email))
+@rate_limit(max_requests=5, window=60)
+async def login(
+    request: Request,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: AsyncSession = Depends(get_db)
+):
+    result = await db.execute(select(User).where(User.email == form_data.username))
     user = result.scalar_one_or_none()
-    if not user or not verify_password(req.password, user.password_hash):
-        raise HTTPException(status_code=401, detail=api_error("auth_failed", "en"))
+    if not user or not verify_password(form_data.password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     if not user.is_active:
-        raise HTTPException(status_code=401, detail=api_error("auth_failed", "en"))
-
-    data = {"sub": str(user.id), "role": user.role, "lang": user.preferred_lang}
-    access = create_access_token(data)
-    refresh = create_refresh_token(data)
-    return {"access_token": access, "refresh_token": refresh, "expires_in": 15 * 60}
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Inactive user")
+    access, refresh = create_tokens(user.id)
+    return {"access_token": access, "refresh_token": refresh}
 
 @router.post("/refresh", response_model=Token)
-async def refresh(req: RefreshRequest, db: AsyncSession = Depends(get_db)):
-    payload = get_token_payload(req.refresh_token)
-    if not payload or payload.get("type") != "refresh":
-        raise HTTPException(status_code=401, detail="Invalid refresh token")
-    jti = payload.get("jti")
-    if jti and redis_client.get(f"blocklist:{jti}"):
-        raise HTTPException(status_code=401, detail="Token revoked")
-    user_id = payload.get("sub")
-    result = await db.execute(select(User).where(User.id == int(user_id)))
-    user = result.scalar_one_or_none()
-    if not user or not user.is_active:
-        raise HTTPException(status_code=401, detail="User not found")
-    # Block old refresh token
-    if jti:
-        redis_client.setex(f"blocklist:{jti}", 7 * 86400, "1")
-    data = {"sub": str(user.id), "role": user.role, "lang": user.preferred_lang}
-    access = create_access_token(data)
-    refresh = create_refresh_token(data)
-    return {"access_token": access, "refresh_token": refresh, "expires_in": 15 * 60}
+@rate_limit(max_requests=10, window=60)
+async def refresh_token(
+    request: Request,
+    token: str = Depends(oauth2_scheme),
+    current_user: User = Depends(get_refresh_token_user)
+):
+    access, new_refresh = await rotate_refresh_token(token, current_user.id)
+    return {"access_token": access, "refresh_token": new_refresh}
 
 @router.post("/logout")
-async def logout(req: RefreshRequest):
-    payload = get_token_payload(req.refresh_token)
-    if payload:
-        jti = payload.get("jti")
-        if jti:
-            redis_client.setex(f"blocklist:{jti}", 7 * 86400, "1")
+async def logout(
+    token: str = Depends(oauth2_scheme),
+    current_user: User = Depends(get_refresh_token_user)
+):
+    await rotate_refresh_token(token, current_user.id)
     return {"detail": "Logged out"}
 
-@router.get("/me", response_model=UserOut)
-async def me(user: User = Depends(get_current_user)):
-    return user
+@router.get("/me", response_model=UserResponse)
+async def get_me(current_user: User = Depends(get_current_active_user)):
+    return current_user

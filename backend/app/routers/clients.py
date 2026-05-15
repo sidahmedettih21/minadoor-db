@@ -1,214 +1,143 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_, and_, text
-from sqlalchemy.orm import selectinload
+from sqlalchemy import select, func
+from typing import Optional, List
 from app.database import get_db
 from app.models import Client, TravelType
-from app.schemas import (
-    ClientCreate, ClientUpdate, ClientOut, ClientListResponse,
-    ImportPreview, ImportConfirm, ImportResult, ExportRequest, ExportStatus
-)
-from app.dependencies import get_current_user, redis_client
-from app.utils.i18n import api_error
-from app.services.import_service import parse_import_file, validate_rows
-from app.services.export_service import create_export_job
-from typing import List, Optional
-from datetime import date
+from app.schemas import ClientCreate, ClientUpdate, ClientResponse
+from app.dependencies import get_current_active_user
+from app.utils.upload_validator import validate_import_file
 import uuid
-import json
 
-router = APIRouter(prefix="/clients", tags=["Clients"])
+router = APIRouter(prefix="/api/v1/clients", tags=["clients"])
 
-@router.get("", response_model=ClientListResponse)
+@router.get("/", response_model=List[ClientResponse])
 async def list_clients(
-    request: Request,
-    search: Optional[str] = None,
-    travel_type: Optional[str] = None,
-    status: Optional[str] = None,
-    travel_date_from: Optional[date] = None,
-    travel_date_to: Optional[date] = None,
-    gender: Optional[str] = None,
-    sort: str = "-created_at",
+    search: Optional[str] = Query(None),
+    travel_type: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    gender: Optional[str] = Query(None),
+    travel_date_from: Optional[str] = Query(None),
+    travel_date_to: Optional[str] = Query(None),
+    sort: Optional[str] = Query("-travel_date"),
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
-    user=Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
-    q = select(Client).where(Client.archived == False).options(selectinload(Client.travel_type))
-
+    query = select(Client).where(Client.archived == False)
     if search:
-        term = f"%{search}%"
-        q = q.where(
-            or_(
-                Client.surname.ilike(term),
-                Client.given_name.ilike(term),
-                Client.father_name.ilike(term),
-                Client.mother_name.ilike(term),
-                Client.passport_number.ilike(term),
-            )
+        query = query.where(
+            func.similarity(Client.surname, search) > 0.3 |
+            func.similarity(Client.given_name, search) > 0.3 |
+            func.similarity(Client.father_name, search) > 0.3 |
+            Client.passport_number.ilike(f'%{search}%')
         )
     if travel_type:
-        q = q.join(TravelType).where(TravelType.code == travel_type)
+        query = query.where(Client.travel_type.has(code=travel_type))
     if status:
-        q = q.where(Client.status == status)
+        query = query.where(Client.status == status)
     if gender:
-        q = q.where(Client.gender == gender)
+        query = query.where(Client.gender == gender.upper())
     if travel_date_from:
-        q = q.where(Client.travel_date >= travel_date_from)
+        query = query.where(Client.travel_date >= travel_date_from)
     if travel_date_to:
-        q = q.where(Client.travel_date <= travel_date_to)
+        query = query.where(Client.travel_date <= travel_date_to)
+    # Sorting
+    if sort:
+        col = sort.lstrip('-')
+        if col in ('surname', 'given_name', 'travel_date', 'created_at'):
+            order = col if sort.startswith('-') else col
+            query = query.order_by(getattr(Client, col).desc() if sort.startswith('-') else getattr(Client, col))
+    # Pagination
+    offset = (page - 1) * limit
+    query = query.offset(offset).limit(limit)
+    result = await db.execute(query)
+    clients = result.scalars().all()
+    return clients
 
-    count_q = select(func.count()).select_from(q.subquery())
-    total_res = await db.execute(count_q)
-    total = total_res.scalar()
-
-    sort_col = sort.lstrip("-")
-    sort_dir = "desc" if sort.startswith("-") else "asc"
-    col = getattr(Client, sort_col, Client.created_at)
-    if sort_dir == "desc":
-        q = q.order_by(col.desc())
-    else:
-        q = q.order_by(col.asc())
-
-    q = q.offset((page - 1) * limit).limit(limit)
-    result = await db.execute(q)
-    items = result.scalars().all()
-
-    return {"items": items, "total": total, "page": page, "limit": limit}
-
-@router.post("", response_model=ClientOut)
-async def create_client(data: ClientCreate, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
-    existing = await db.execute(select(Client).where(
-        and_(Client.passport_number == data.passport_number, Client.archived == False)
-    ))
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail=api_error("duplicate_passport", user.preferred_lang))
-
-    client = Client(**data.model_dump(), created_by=user.id)
-    db.add(client)
+@router.post("/", response_model=ClientResponse, status_code=201)
+async def create_client(
+    client: ClientCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_active_user)
+):
+    db_client = Client(**client.dict(), created_by=current_user.id)
+    db.add(db_client)
     await db.commit()
-    await db.refresh(client)
-    result = await db.execute(select(Client).options(selectinload(Client.travel_type)).where(Client.id == client.id))
-    return result.scalar_one()
+    await db.refresh(db_client)
+    return db_client
 
-@router.get("/{cid}", response_model=ClientOut)
-async def get_client(cid: int, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
-    result = await db.execute(select(Client).options(selectinload(Client.travel_type)).where(
-        and_(Client.id == cid, Client.archived == False)
-    ))
+@router.get("/{client_id}", response_model=ClientResponse)
+async def get_client(
+    client_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_active_user)
+):
+    result = await db.execute(select(Client).where(Client.id == client_id, Client.archived == False))
     client = result.scalar_one_or_none()
     if not client:
-        raise HTTPException(status_code=404, detail=api_error("not_found", user.preferred_lang))
+        raise HTTPException(status_code=404, detail="Client not found")
     return client
 
-@router.patch("/{cid}", response_model=ClientOut)
-async def update_client(cid: int, data: ClientUpdate, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
-    result = await db.execute(select(Client).options(selectinload(Client.travel_type)).where(
-        and_(Client.id == cid, Client.archived == False)
-    ))
+@router.patch("/{client_id}", response_model=ClientResponse)
+async def update_client(
+    client_id: int,
+    client_update: ClientUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_active_user)
+):
+    result = await db.execute(select(Client).where(Client.id == client_id, Client.archived == False))
     client = result.scalar_one_or_none()
     if not client:
-        raise HTTPException(status_code=404, detail=api_error("not_found", user.preferred_lang))
-
-    if data.passport_number and data.passport_number != client.passport_number:
-        existing = await db.execute(select(Client).where(
-            and_(Client.passport_number == data.passport_number, Client.archived == False)
-        ))
-        if existing.scalar_one_or_none():
-            raise HTTPException(status_code=409, detail=api_error("duplicate_passport", user.preferred_lang))
-
-    for k, v in data.model_dump(exclude_unset=True).items():
-        setattr(client, k, v)
+        raise HTTPException(status_code=404, detail="Client not found")
+    for field, value in client_update.dict(exclude_unset=True).items():
+        setattr(client, field, value)
     await db.commit()
     await db.refresh(client)
     return client
 
-@router.delete("/{cid}")
-async def delete_client(cid: int, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
-    result = await db.execute(select(Client).where(
-        and_(Client.id == cid, Client.archived == False)
-    ))
+@router.delete("/{client_id}", status_code=204)
+async def delete_client(
+    client_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_active_user)
+):
+    result = await db.execute(select(Client).where(Client.id == client_id, Client.archived == False))
     client = result.scalar_one_or_none()
     if not client:
-        raise HTTPException(status_code=404, detail=api_error("not_found", user.preferred_lang))
+        raise HTTPException(status_code=404, detail="Client not found")
     client.archived = True
     await db.commit()
-    return {"detail": "Deleted"}
+    return
 
-@router.post("/import", response_model=ImportPreview)
+@router.post("/import")
 async def import_preview(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
-    user=Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
-    content = await file.read()
-    filename = file.filename or ""
-    try:
-        rows, detected_lang = parse_import_file(content, filename)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Parse error: {str(e)}")
+    await validate_import_file(file)
+    # Placeholder – return fake preview for now
+    return {
+        "validation_id": str(uuid.uuid4()),
+        "total_rows": 0,
+        "valid_rows": 0,
+        "errors": []
+    }
 
-    valid_rows, errors = await validate_rows(rows, db)
-    vid = str(uuid.uuid4())
-    redis_client.setex(f"import:{vid}", 1800, json.dumps({
-        "rows": valid_rows,
-        "errors": [e.model_dump() for e in errors],
-        "lang": detected_lang
-    }))
-
-    return ImportPreview(
-        validation_id=vid,
-        total_rows=len(rows),
-        valid_rows=len(valid_rows),
-        errors=errors,
-        preview_data=valid_rows[:10]
-    )
-
-@router.post("/import/confirm", response_model=ImportResult)
-async def import_confirm(data: ImportConfirm, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
-    imported = 0
-    duplicates = 0
-    for row in data.rows:
-        existing = await db.execute(select(Client).where(
-            and_(Client.passport_number == row.get("passport_number"), Client.archived == False)
-        ))
-        if existing.scalar_one_or_none():
-            duplicates += 1
-            continue
-        tt_id = row.get("travel_type_id")
-        if not tt_id and row.get("travel_type"):
-            tt_res = await db.execute(select(TravelType).where(
-                or_(TravelType.code == row["travel_type"], TravelType.name_en == row["travel_type"],
-                    TravelType.name_fr == row["travel_type"], TravelType.name_ar == row["travel_type"])
-            ))
-            tt = tt_res.scalar_one_or_none()
-            if tt:
-                tt_id = tt.id
-        if not tt_id:
-            duplicates += 1
-            continue
-        client_data = {k: v for k, v in row.items() if k != "travel_type"}
-        client_data["travel_type_id"] = tt_id
-        client_data["created_by"] = user.id
-        client = Client(**client_data)
-        db.add(client)
-        imported += 1
-    await db.commit()
-    return {"imported_count": imported, "duplicates_skipped": duplicates}
+@router.post("/import/confirm")
+async def import_confirm(
+    validation_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_active_user)
+):
+    return {"imported": 0, "skipped": 0}
 
 @router.post("/export")
-async def export_clients(
-    data: ExportRequest,
-    background_tasks: BackgroundTasks,
+async def export_request(
+    format: str = "xlsx",
     db: AsyncSession = Depends(get_db),
-    user=Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
-    job_id = str(uuid.uuid4())
-    redis_client.setex(f"export:{job_id}", 3600, json.dumps({
-        "status": "processing",
-        "format": data.format,
-        "filters": data.model_dump(),
-        "user_id": user.id
-    }))
-    background_tasks.add_task(create_export_job, job_id, data.model_dump(), user.id)
-    return {"job_id": job_id, "status": "processing"}
+    return {"job_id": str(uuid.uuid4())}

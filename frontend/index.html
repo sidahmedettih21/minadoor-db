@@ -22,6 +22,7 @@
       }
     }
   </script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
 </head>
 <body class="min-h-screen bg-bg">
   <!-- Toast Container -->
@@ -70,7 +71,7 @@
   <div x-show="isLoggedIn" class="flex min-h-screen" style="display:none;">
     <!-- Sidebar -->
     <aside class="w-64 bg-surface border-r border-gray-200 flex flex-col fixed h-full z-40 transition-transform"
-           :class="mobileMenuOpen ? 'translate-x-0' : (lang==='ar' ? 'translate-x-0' : '-translate-x-full')"
+           :class="mobileMenuOpen ? 'translate-x-0' : 'translate-x-0' : '-translate-x-full'"
            class="lg:translate-x-0 lg:static">
       <div class="p-6 border-b border-gray-100">
         <img src="/assets/logo.png" alt="MinaDoor" class="logo-img">

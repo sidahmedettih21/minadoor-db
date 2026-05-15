@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+/uploads
+/exports
+*.log
+.DS_Store
+node_modules/
+.venv/
+*.swp
