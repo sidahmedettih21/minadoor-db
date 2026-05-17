@@ -8,3 +8,5 @@ __pycache__/
 node_modules/
 .venv/
 *.swp
+backup_*/
+.env

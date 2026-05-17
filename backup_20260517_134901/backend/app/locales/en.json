@@ -1,9 +1,0 @@
-{
-  "invalid_credentials": "Invalid email or password",
-  "inactive_user": "This account is deactivated",
-  "not_found": "Resource not found",
-  "forbidden": "You do not have permission",
-  "server_error": "Internal server error",
-  "too_many_requests": "Too many requests. Please slow down.",
-  "file_invalid": "Invalid file format"
-}
