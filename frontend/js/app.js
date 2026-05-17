@@ -511,3 +511,7 @@ function app() {
     }
   };
 }
+// Global sanitizer
+function sanitize(dirty) {
+    return window.DOMPurify ? DOMPurify.sanitize(dirty) : dirty;
+}

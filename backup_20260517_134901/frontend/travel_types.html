@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en" x-data="{ lang: 'en' }" dir="ltr">
+<head>
+    <meta charset="UTF-8">
+    <title>Travel Types – MinaDoor</title>
+    <link rel="stylesheet" href="css/app.css">
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3"></script>
+    <script src="js/app.js"></script>
+</head>
+<body x-data="travelTypes()" x-init="fetchTypes()">
+    <div class="container mx-auto p-4">
+        <h1 class="text-2xl font-bold mb-4">Travel Types</h1>
+        <table class="w-full mb-4">
+            <thead>
+                <tr><th>EN</th><th>FR</th><th>AR</th><th>Code</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+                <template x-for="type in types" :key="type.id">
+                    <tr>
+                        <td x-text="type.name_en"></td>
+                        <td x-text="type.name_fr"></td>
+                        <td x-text="type.name_ar"></td>
+                        <td x-text="type.code"></td>
+                        <td><button @click="deleteType(type.id)" class="text-red-500">Delete</button></td>
+                    </tr>
+                </template>
+            </tbody>
+        </table>
+        <form @submit.prevent="addType" class="grid grid-cols-2 gap-4">
+            <input x-model="newType.name_en" placeholder="Name (EN)" required class="border p-2">
+            <input x-model="newType.name_fr" placeholder="Name (FR)" required class="border p-2">
+            <input x-model="newType.name_ar" placeholder="Name (AR)" required class="border p-2">
+            <input x-model="newType.code" placeholder="Code" required class="border p-2">
+            <button type="submit" class="bg-blue-500 text-white p-2 col-span-2">Add Type</button>
+        </form>
+    </div>
+    <script>
+    function travelTypes() {
+        return {
+            types: [],
+            newType: { name_en: '', name_fr: '', name_ar: '', code: '' },
+            async fetchTypes() {
+                const res = await fetch('/api/v1/travel-types', { headers: {'Authorization': `Bearer ${localStorage.token}`} });
+                this.types = await res.json();
+            },
+            async addType() {
+                await fetch('/api/v1/travel-types', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.token}` },
+                    body: JSON.stringify(this.newType)
+                });
+                this.newType = { name_en: '', name_fr: '', name_ar: '', code: '' };
+                await this.fetchTypes();
+            },
+            async deleteType(id) {
+                await fetch(`/api/v1/travel-types/${id}`, { method: 'DELETE', headers: {'Authorization': `Bearer ${localStorage.token}`} });
+                await this.fetchTypes();
+            }
+        }
+    }
+    </script>
+</body>
+</html>

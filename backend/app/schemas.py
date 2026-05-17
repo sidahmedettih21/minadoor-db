@@ -1,6 +1,6 @@
 from pydantic import BaseModel, validator, EmailStr
 from typing import Optional, List
-from datetime import date, datetime
+from datetime import date
 import re
 
 class UserCreate(BaseModel):
@@ -79,13 +79,13 @@ class ClientUpdate(BaseModel):
 
 class ClientResponse(ClientBase):
     id: int
-    created_at: datetime
-    updated_at: datetime
+    created_at: date
+    updated_at: date
     created_by: Optional[int] = None
     archived: bool
 
     class Config:
-        from_attributes = True
+        orm_mode = True
 
 class TravelTypeCreate(BaseModel):
     code: str
@@ -115,8 +115,3 @@ class ImportPreview(BaseModel):
     total_rows: int
     valid_rows: int
     errors: List[dict]
-
-class ExportStatus(BaseModel):
-    job_id: str
-    status: str
-    download_url: Optional[str] = None

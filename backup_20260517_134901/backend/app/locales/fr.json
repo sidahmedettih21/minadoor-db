@@ -1,0 +1,9 @@
+{
+  "invalid_credentials": "Email ou mot de passe invalide",
+  "inactive_user": "Ce compte est désactivé",
+  "not_found": "Ressource introuvable",
+  "forbidden": "Vous n'avez pas les permissions",
+  "server_error": "Erreur interne du serveur",
+  "too_many_requests": "Trop de requêtes. Veuillez ralentir.",
+  "file_invalid": "Format de fichier invalide"
+}

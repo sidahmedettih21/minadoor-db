@@ -1,12 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 from app.database import get_db
 from app.models import User
-from app.schemas import Token, UserResponse
+from app.schemas import Token
 from app.auth import create_tokens, rotate_refresh_token, verify_password
-from app.dependencies import get_refresh_token_user, rate_limit, oauth2_scheme, get_current_active_user
+from app.dependencies import get_refresh_token_user, rate_limit
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
@@ -17,8 +16,7 @@ async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db)
 ):
-    result = await db.execute(select(User).where(User.email == form_data.username))
-    user = result.scalar_one_or_none()
+    user = await db.get(User, form_data.username)  # username = email
     if not user or not verify_password(form_data.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     if not user.is_active:
@@ -30,20 +28,19 @@ async def login(
 @rate_limit(max_requests=10, window=60)
 async def refresh_token(
     request: Request,
-    token: str = Depends(oauth2_scheme),
-    current_user: User = Depends(get_refresh_token_user)
+    current_user: User = Depends(get_refresh_token_user),
+    token: str = Depends(OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login"))  # we need the raw token
 ):
+    # get_refresh_token_user already validated token & blocklist
+    # token is passed via dependency, but we need the raw string; use Depends as above
     access, new_refresh = await rotate_refresh_token(token, current_user.id)
     return {"access_token": access, "refresh_token": new_refresh}
 
 @router.post("/logout")
 async def logout(
-    token: str = Depends(oauth2_scheme),
-    current_user: User = Depends(get_refresh_token_user)
+    current_user: User = Depends(get_refresh_token_user),
+    token: str = Depends(OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login"))
 ):
-    await rotate_refresh_token(token, current_user.id)
+    # We'll invalidate refresh token by adding to blocklist
+    await rotate_refresh_token(token, current_user.id)  # just call rotation to blacklist
     return {"detail": "Logged out"}
-
-@router.get("/me", response_model=UserResponse)
-async def get_me(current_user: User = Depends(get_current_active_user)):
-    return current_user

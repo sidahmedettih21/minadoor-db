@@ -5,7 +5,7 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from app.config import get_settings
+from app.config import CORS_ORIGINS
 from app.logger import logger
 from app.middleware.upload import UploadValidationMiddleware
 from app.middleware.version import VersionHeaderMiddleware
@@ -15,7 +15,7 @@ app = FastAPI(title="MinaDoor Travel DB", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=get_settings().CORS_ORIGINS,
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
