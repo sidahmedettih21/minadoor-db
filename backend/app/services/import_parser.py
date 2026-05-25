@@ -1,6 +1,7 @@
 from typing import Optional
 import csv
 import io
+import openpyxl
 
 
 HEADER_ALIASES: dict[str, dict[str, str]] = {
@@ -123,4 +124,56 @@ def parse_csv(file_content: bytes) -> list[dict]:
         if mapped:
             result.append(mapped)
 
+    return result
+
+
+def parse_xlsx(file_content: bytes) -> list[dict]:
+    wb = openpyxl.load_workbook(io.BytesIO(file_content), read_only=True, data_only=True)
+    ws = wb.active
+
+    if ws is None:
+        wb.close()
+        return []
+
+    rows_iter = ws.iter_rows(values_only=True)
+
+    try:
+        first_row = next(rows_iter)
+    except StopIteration:
+        wb.close()
+        return []
+
+    headers = list(first_row)
+
+    resolved = {}
+    for h in headers:
+        if h is None:
+            continue
+        field = resolve_field(str(h))
+        if field:
+            resolved[str(h)] = field
+
+    if not resolved:
+        wb.close()
+        raise ValueError("No headers could be resolved from the XLSX file")
+
+    result = []
+    for row in rows_iter:
+        if all(cell is None for cell in row):
+            continue
+        mapped = {}
+        for i, cell in enumerate(row):
+            if i >= len(headers):
+                break
+            h = headers[i]
+            if h is None or str(h) not in resolved:
+                continue
+            if cell is not None:
+                val = str(cell).strip()
+                if val:
+                    mapped[resolved[str(h)]] = val
+        if mapped:
+            result.append(mapped)
+
+    wb.close()
     return result

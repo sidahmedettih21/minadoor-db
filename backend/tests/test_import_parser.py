@@ -1,6 +1,8 @@
 import pytest
 import os
-from app.services.import_parser import HEADER_ALIASES, resolve_field, parse_csv
+import io
+import openpyxl
+from app.services.import_parser import HEADER_ALIASES, resolve_field, parse_csv, parse_xlsx
 
 
 class TestResolveField:
@@ -266,3 +268,118 @@ class TestParseCsv:
         assert result[0]["nationality"] == "France"
         assert "mother_name" not in result[0]
         assert "date_of_birth" not in result[0]
+
+
+class TestParseXlsx:
+    @staticmethod
+    def _make_xlsx(headers: list[str], rows: list[list]) -> bytes:
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(headers)
+        for r in rows:
+            ws.append(r)
+        buf = io.BytesIO()
+        wb.save(buf)
+        wb.close()
+        return buf.getvalue()
+
+    def test_parse_valid_xlsx(self):
+        content = self._make_xlsx(
+            ["Surname", "Given Name", "Passport Number", "Travel Date"],
+            [["Smith", "John", "AB1234567", "2027-12-01"]],
+        )
+        result = parse_xlsx(content)
+        assert len(result) == 1
+        assert result[0]["surname"] == "Smith"
+        assert result[0]["given_name"] == "John"
+
+    def test_parse_french_headers(self):
+        content = self._make_xlsx(
+            ["Nom", "Prénom", "Date de naissance"],
+            [["Dupont", "Jean", "1990-05-15"]],
+        )
+        result = parse_xlsx(content)
+        assert result[0]["surname"] == "Dupont"
+        assert result[0]["given_name"] == "Jean"
+        assert result[0]["date_of_birth"] == "1990-05-15"
+
+    def test_parse_arabic_headers(self):
+        content = self._make_xlsx(
+            ["اللقب", "الاسم", "تاريخ السفر"],
+            [["محمد", "أحمد", "2027-06-15"]],
+        )
+        result = parse_xlsx(content)
+        assert result[0]["surname"] == "محمد"
+        assert result[0]["given_name"] == "أحمد"
+
+    def test_empty_workbook_returns_empty_list(self):
+        content = self._make_xlsx(["Surname"], [])
+        result = parse_xlsx(content)
+        assert result == []
+
+    def test_header_only_returns_empty_list(self):
+        content = self._make_xlsx(["Surname", "Given Name"], [])
+        result = parse_xlsx(content)
+        assert result == []
+
+    def test_unknown_headers_silently_dropped(self):
+        content = self._make_xlsx(
+            ["Surname", "FooColumn", "Given Name"],
+            [["Doe", "bar", "John"]],
+        )
+        result = parse_xlsx(content)
+        assert len(result) == 1
+        assert "foocolumn" not in result[0]
+        assert result[0]["surname"] == "Doe"
+        assert result[0]["given_name"] == "John"
+
+    def test_raises_on_totally_unresolvable_headers(self):
+        content = self._make_xlsx(["Col1", "Col2"], [["A", "B"]])
+        with pytest.raises(ValueError, match="No headers could be resolved"):
+            parse_xlsx(content)
+
+    def test_integer_cells_converted_to_string(self):
+        content = self._make_xlsx(
+            ["Surname", "Passport Number"],
+            [["Doe", 1234567]],
+        )
+        result = parse_xlsx(content)
+        assert result[0]["passport_number"] == "1234567"
+
+    def test_empty_cells_omitted(self):
+        content = self._make_xlsx(
+            ["Surname", "Given Name", "Mother Name"],
+            [["Doe", "John", None]],
+        )
+        result = parse_xlsx(content)
+        assert result[0]["surname"] == "Doe"
+        assert result[0]["given_name"] == "John"
+        assert "mother_name" not in result[0]
+
+    def test_skip_empty_rows(self):
+        content = self._make_xlsx(
+            ["Surname", "Given Name"],
+            [["Doe", "John"], [None, None]],
+        )
+        result = parse_xlsx(content)
+        assert len(result) == 1
+        assert result[0]["surname"] == "Doe"
+
+    def test_multiple_data_rows(self):
+        content = self._make_xlsx(
+            ["Surname", "Given Name"],
+            [["Doe", "John"], ["Smith", "Jane"]],
+        )
+        result = parse_xlsx(content)
+        assert len(result) == 2
+        assert result[0]["surname"] == "Doe"
+        assert result[1]["given_name"] == "Jane"
+
+    def test_mother_name_parent_name_fields(self):
+        content = self._make_xlsx(
+            ["Surname", "Given Name", "Father Name", "Mother Name"],
+            [["Ali", "Ahmed", "Hassan", "Fatima"]],
+        )
+        result = parse_xlsx(content)
+        assert result[0]["father_name"] == "Hassan"
+        assert result[0]["mother_name"] == "Fatima"
