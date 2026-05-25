@@ -1,5 +1,6 @@
 import pytest
-from app.services.import_parser import HEADER_ALIASES, resolve_field
+import os
+from app.services.import_parser import HEADER_ALIASES, resolve_field, parse_csv
 
 
 class TestResolveField:
@@ -171,3 +172,97 @@ class TestResolveField:
         assert "en" in HEADER_ALIASES
         assert "fr" in HEADER_ALIASES
         assert "ar" in HEADER_ALIASES
+
+
+class TestParseCsv:
+    def test_parse_valid_csv(self):
+        raw = b"Surname,Given Name,Father Name,Mother Name,Passport Number,Nationality,Travel Date\nSmith,John,Robert,Maria,AB1234567,USA,2027-12-01\n"
+        result = parse_csv(raw)
+        assert len(result) == 1
+        assert result[0]["surname"] == "Smith"
+        assert result[0]["given_name"] == "John"
+        assert result[0]["father_name"] == "Robert"
+        assert result[0]["passport_number"] == "AB1234567"
+        assert result[0]["nationality"] == "USA"
+        assert result[0]["travel_date"] == "2027-12-01"
+
+    def test_parse_with_bom(self):
+        raw = b"\xef\xbb\xbfSurname,Given Name\nDoe,John\n"
+        result = parse_csv(raw)
+        assert len(result) == 1
+        assert result[0]["surname"] == "Doe"
+
+    def test_parse_latin1_french_headers(self):
+        raw = "Nom,Prénom,Date de naissance\nDupont,Jean,1990-05-15\n".encode("latin-1")
+        result = parse_csv(raw)
+        assert len(result) == 1
+        assert result[0]["surname"] == "Dupont"
+        assert result[0]["given_name"] == "Jean"
+        assert result[0]["date_of_birth"] == "1990-05-15"
+
+    def test_parse_arabic_headers(self):
+        raw = "اللقب,الاسم,تاريخ السفر\nمحمد,أحمد,2027-06-15\n".encode("utf-8")
+        result = parse_csv(raw)
+        assert len(result) == 1
+        assert result[0]["surname"] == "محمد"
+        assert result[0]["given_name"] == "أحمد"
+        assert result[0]["travel_date"] == "2027-06-15"
+
+    def test_unknown_headers_silently_dropped(self):
+        raw = b"Surname,FooColumn,Given Name\nDoe,bar,John\n"
+        result = parse_csv(raw)
+        assert len(result) == 1
+        assert "foocolumn" not in result[0]
+        assert result[0]["surname"] == "Doe"
+        assert result[0]["given_name"] == "John"
+
+    def test_empty_bytes_returns_empty_list(self):
+        assert parse_csv(b"") == []
+
+    def test_whitespace_only_bytes_returns_empty_list(self):
+        assert parse_csv(b"   \n\n  ") == []
+
+    def test_header_only_no_data_rows(self):
+        raw = b"Surname,Given Name\n"
+        result = parse_csv(raw)
+        assert result == []
+
+    def test_skip_empty_data_rows(self):
+        raw = b"Surname,Given Name\nDoe,John\n,\n\n"
+        result = parse_csv(raw)
+        assert len(result) == 1
+        assert result[0]["surname"] == "Doe"
+
+    def test_parse_from_actual_fixture_file(self):
+        fixture_path = os.path.join(os.path.dirname(__file__), "fixtures", "valid_en.csv")
+        with open(fixture_path, "rb") as f:
+            content = f.read()
+        result = parse_csv(content)
+        assert len(result) == 1
+        assert result[0]["surname"] == "Smith"
+        assert result[0]["given_name"] == "John"
+        assert result[0]["father_name"] == "Robert"
+        assert result[0]["passport_number"] == "AB1234567"
+        assert result[0]["travel_date"] == "2027-12-01"
+        assert result[0]["mother_name"] == "Maria"
+        assert result[0]["payment_method"] == "cash"
+        assert result[0]["notes"] == "Test client"
+
+    def test_resolved_fields_are_canonical(self):
+        raw = b"Surname,Given Name,Father Name,Passport Number,Travel Date\nX,Y,Z,PN123,2027-01-01\n"
+        result = parse_csv(raw)
+        row = result[0]
+        assert list(row.keys()) == ["surname", "given_name", "father_name", "passport_number", "travel_date"]
+
+    def test_raises_on_totally_unresolvable_headers(self):
+        raw = b"Col1,Col2,Col3\nA,B,C\n"
+        with pytest.raises(ValueError, match="No headers could be resolved"):
+            parse_csv(raw)
+
+    def test_parse_with_optional_fields_missing(self):
+        raw = b"Surname,Given Name,Father Name,Nationality,Travel Date\nYann,Marie,Paul,France,2027-03-10\n"
+        result = parse_csv(raw)
+        assert result[0]["surname"] == "Yann"
+        assert result[0]["nationality"] == "France"
+        assert "mother_name" not in result[0]
+        assert "date_of_birth" not in result[0]

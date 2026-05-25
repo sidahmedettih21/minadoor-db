@@ -1,4 +1,7 @@
 from typing import Optional
+import csv
+import io
+
 
 HEADER_ALIASES: dict[str, dict[str, str]] = {
     "en": {
@@ -80,3 +83,44 @@ def resolve_field(header: str | None) -> Optional[str]:
             return lang_map[cleaned]
 
     return None
+
+
+def parse_csv(file_content: bytes) -> list[dict]:
+    if not file_content or not file_content.strip():
+        return []
+
+    if file_content.startswith(b'\xef\xbb\xbf'):
+        decoded = file_content.decode('utf-8-sig')
+    else:
+        try:
+            decoded = file_content.decode('utf-8')
+        except UnicodeDecodeError:
+            decoded = file_content.decode('latin-1')
+
+    reader = csv.DictReader(io.StringIO(decoded))
+
+    if not reader.fieldnames:
+        return []
+
+    resolved = {}
+    for h in reader.fieldnames:
+        field = resolve_field(h)
+        if field:
+            resolved[h] = field
+
+    if not resolved:
+        raise ValueError("No headers could be resolved from the CSV file")
+
+    result = []
+    for row in reader:
+        if all(v is None or (isinstance(v, str) and v.strip() == '') for v in row.values()):
+            continue
+        mapped = {}
+        for orig_header, field_name in resolved.items():
+            val = row.get(orig_header)
+            if val and isinstance(val, str) and val.strip():
+                mapped[field_name] = val.strip()
+        if mapped:
+            result.append(mapped)
+
+    return result
