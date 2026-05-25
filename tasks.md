@@ -9,7 +9,7 @@
 
 ## Phase 2: Import Parsing Engine [⊕]
 
-- [ ] T5: Build i18n header alias map — define `HEADER_ALIASES` dict for `en`, `fr`, `ar` that maps spreadsheet column names to model field names
+- [x] T5: Build i18n header alias map — define `HEADER_ALIASES` dict for `en`, `fr`, `ar` that maps spreadsheet column names to model field names
 - [ ] T6: Implement CSV parser — read file with `csv.DictReader`, BOM support, map headers via alias map, yield dicts
 - [ ] T7: Implement XLSX parser — read file with `openpyxl`, iterate rows, map headers via alias map, yield dicts
 - [ ] T8: Implement row validator — check required fields, date formats, gender; return `{ row_index, field, message }` errors
