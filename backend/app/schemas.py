@@ -115,3 +115,8 @@ class ImportPreview(BaseModel):
     total_rows: int
     valid_rows: int
     errors: List[dict]
+    preview_data: List[dict] = []
+
+class ImportConfirmRequest(BaseModel):
+    rows: list[ClientCreate]
+    validation_id: str | None = None

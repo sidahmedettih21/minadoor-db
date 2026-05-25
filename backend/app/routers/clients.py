@@ -9,7 +9,7 @@ from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models import Client, TravelType
-from app.schemas import ClientCreate, ClientUpdate, ClientResponse, PaginatedClients, ExportRequest, ImportPreview
+from app.schemas import ClientCreate, ClientUpdate, ClientResponse, PaginatedClients, ExportRequest, ImportPreview, ImportConfirmRequest
 from app.dependencies import get_current_active_user, redis_client
 from app.utils.upload_validator import validate_import_file
 from app.services import import_service, export_service
@@ -182,15 +182,11 @@ async def import_preview(
 
 @router.post("/import/confirm")
 async def import_confirm(
-    validation_id: str,
+    body: ImportConfirmRequest,
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_active_user),
 ):
-    cached = await redis_client.get(f"import:{validation_id}")
-    if not cached:
-        raise HTTPException(status_code=404, detail="Validation session expired or not found")
-    data = json.loads(cached)
-    return await import_service.commit_import(validation_id, data.get("rows", []))
+    return await import_service.commit_import(body.validation_id or "", body.rows)
 
 
 @router.post("/export")

@@ -2,10 +2,10 @@
 
 ## Phase 1: Contract Alignment [√]
 
-- [ ] T1: Fix import route path — update frontend `app.js:347` from `/clients/import` to `/clients/import/preview`
-- [ ] T2: Fix confirm endpoint — change `validation_id` from query param to body `{ validation_id, rows }` in `clients.py` + `import_service.py`
-- [ ] T3: Fix response keys — rename `imported` → `imported_count`, `skipped` → `duplicates_skipped` in `import_service.py` + route handler
-- [ ] T4: Fix deprecated API — change `row.dict()` → `row.model_dump()` and `async_session` → `AsyncSessionLocal` in `import_service.py`
+- [x] T1: Fix import route path — update frontend `app.js:347` from `/clients/import` to `/clients/import/preview`
+- [x] T2: Fix confirm endpoint — change `validation_id` from query param to body `{ validation_id, rows }` in `clients.py` + `import_service.py`
+- [x] T3: Fix response keys — rename `imported` → `imported_count`, `skipped` → `duplicates_skipped` in `import_service.py` + route handler
+- [x] T4: Fix deprecated API — change `row.dict()` → `row.model_dump()` and `async_session` → `AsyncSessionLocal` in `import_service.py`
 
 ## Phase 2: Import Parsing Engine [⊕]
 

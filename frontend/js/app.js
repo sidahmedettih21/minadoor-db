@@ -344,7 +344,7 @@ function app() {
       const formData = new FormData();
       formData.append('file', file);
       try {
-        const res = await this.api('/clients/import', { method: 'POST', body: formData });
+        const res = await this.api('/clients/import/preview', { method: 'POST', body: formData });
         if (res.ok) {
           this.importPreview = await res.json();
           this.importStep = 2;
