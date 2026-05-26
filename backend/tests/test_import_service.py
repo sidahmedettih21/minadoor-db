@@ -87,6 +87,34 @@ class TestParseAndValidate:
         assert result["total_rows"] == 60
         assert len(result["preview_data"]) == 50
 
+    @pytest.mark.anyio
+    @patch("app.services.import_service.redis_client.setex", new_callable=AsyncMock)
+    async def test_cross_batch_duplicate_flagged(self, mock_setex):
+        session = AsyncMock()
+        session.__aenter__.return_value = session
+        session.__aexit__ = AsyncMock(return_value=None)
+        result_mock = MagicMock()
+        result_mock.scalars.return_value.all.return_value = ["AB123456"]
+        session.execute.return_value = result_mock
+        with patch("app.services.import_service.AsyncSessionLocal", return_value=session):
+            result = await parse_and_validate(self.VALID_CSV, "test.csv")
+        assert result["valid_rows"] == 0
+        assert len(result["errors"]) == 1
+        assert result["errors"][0]["field"] == "passport_number"
+        assert "already exists" in result["errors"][0]["message"].lower()
+
+    @pytest.mark.anyio
+    @patch("app.services.import_service.redis_client.setex", new_callable=AsyncMock)
+    async def test_cross_batch_db_failure_does_not_block(self, mock_setex):
+        session = AsyncMock()
+        session.__aenter__.return_value = session
+        session.__aexit__ = AsyncMock(return_value=None)
+        session.execute.side_effect = Exception("DB timeout")
+        with patch("app.services.import_service.AsyncSessionLocal", return_value=session):
+            result = await parse_and_validate(self.VALID_CSV, "test.csv")
+        assert result["valid_rows"] == 1
+        assert result["errors"] == []
+
 
 class TestCommitImport:
     @pytest.fixture

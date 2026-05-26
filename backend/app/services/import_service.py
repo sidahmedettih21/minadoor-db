@@ -23,7 +23,33 @@ async def parse_and_validate(file_content: bytes, filename: str) -> dict:
     total_rows = len(parsed)
     validated, val_errors = validate_rows(parsed)
     deduped, dup_errors = detect_intra_batch_duplicates(validated)
-    all_errors = val_errors + dup_errors
+
+    cross_batch_errors = []
+    if deduped:
+        try:
+            async with AsyncSessionLocal() as session:
+                existing = await session.execute(
+                    select(Client.passport_number).where(
+                        Client.passport_number.in_([r["passport_number"] for r in deduped])
+                    )
+                )
+                existing_passports = set(existing.scalars().all())
+                filtered = []
+                for row in deduped:
+                    pn = row.get("passport_number", "")
+                    if pn in existing_passports:
+                        cross_batch_errors.append({
+                            "row": 0,
+                            "field": "passport_number",
+                            "message": f"Passport already exists in database: {pn}",
+                        })
+                    else:
+                        filtered.append(row)
+                deduped = filtered
+        except Exception:
+            logger.warning("DB unavailable, skipping cross-batch duplicate check")
+
+    all_errors = val_errors + dup_errors + cross_batch_errors
 
     validation_id = str(uuid.uuid4())
     try:
