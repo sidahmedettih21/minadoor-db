@@ -198,6 +198,46 @@ def _parse_date(value: str) -> datetime | None:
 REQUIRED_FIELDS = {"surname", "given_name", "father_name", "passport_number", "nationality", "travel_type_id", "travel_date"}
 DATE_FIELDS = {"travel_date", "date_of_birth", "passport_issue_date", "passport_expiry"}
 
+TRAVEL_TYPE_LOOKUP: dict[str, int] = {
+    "cash_umrah": 1, "cash_hajj": 2,
+    "instalment_umrah": 3, "instalment_hajj": 4,
+    "organised_travel": 5,
+    "cash umrah": 1, "cash hajj": 2,
+    "instalment umrah": 3, "instalment hajj": 4,
+    "organised travel": 5,
+    "omra au comptant": 1, "hajj au comptant": 2,
+    "omra à tempérament": 3, "hajj à tempérament": 4,
+    "voyage organisé": 5,
+    "عمرة نقدًا": 1, "حج نقدًا": 2,
+    "عمرة بالتقسيط": 3, "حج بالتقسيط": 4,
+    "سفر منظم": 5,
+}
+
+
+def resolve_travel_type_id(raw: str) -> tuple[int | None, str | None]:
+    key = raw.strip().lower()
+    id_ = TRAVEL_TYPE_LOOKUP.get(key)
+    if id_ is not None:
+        return id_, None
+    return None, f"Unknown travel type: '{raw}'. Use a valid code or name."
+
+
+def validate_travel_types(rows: list[dict]) -> tuple[list[dict], list[dict]]:
+    good: list[dict] = []
+    errors: list[dict] = []
+    for idx, row in enumerate(rows):
+        raw = row.get("travel_type_id", "")
+        if not raw or not isinstance(raw, str) or not raw.strip():
+            good.append(row)
+            continue
+        id_, err = resolve_travel_type_id(raw)
+        if err:
+            errors.append({"row": idx, "field": "travel_type_id", "message": err})
+        else:
+            row["travel_type_id"] = id_
+            good.append(row)
+    return good, errors
+
 
 def validate_rows(rows: list[dict]) -> tuple[list[dict], list[dict]]:
     valid_rows: list[dict] = []

@@ -1,4 +1,4 @@
 Surname,Given Name,Father Name,Mother Name,Passport Number,Nationality,Date of Birth,Passport Issue,Passport Expiry,Gender,Travel Type,Payment Method,Travel Date,Notes
-Smith,John,Robert,Maria,AB1234567,USA,1990-01-01,2020-01-01,2030-01-01,M,umrah,cash,2027-12-01,Valid client
-,,Hassan,Leila,CD8901234,Canada,1985-06-15,2019-03-01,2029-03-01,M,hajj,cash,2027-11-15,Missing surname
-Doe,Jane,Peter,Alice,EF4567890,UK,1992-11-30,2018-07-01,2028-07-01,X,umrah,cash,2027-10-01,Bad gender
+Smith,John,Robert,Maria,AB1234567,USA,1990-01-01,2020-01-01,2030-01-01,M,cash_umrah,cash,2027-12-01,Valid client
+,,Hassan,Leila,CD8901234,Canada,1985-06-15,2019-03-01,2029-03-01,M,cash_hajj,cash,2027-11-15,Missing surname
+Doe,Jane,Peter,Alice,EF4567890,UK,1992-11-30,2018-07-01,2028-07-01,X,cash_umrah,cash,2027-10-01,Bad gender
