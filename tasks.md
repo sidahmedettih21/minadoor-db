@@ -12,7 +12,7 @@
 - [x] T5: Build i18n header alias map — define `HEADER_ALIASES` dict for `en`, `fr`, `ar` that maps spreadsheet column names to model field names
 - [x] T6: Implement CSV parser — read file with `csv.DictReader`, BOM support, map headers via alias map, yield dicts
 - [x] T7: Implement XLSX parser — read file with `openpyxl`, iterate rows, map headers via alias map, yield dicts
-- [ ] T8: Implement row validator — check required fields, date formats, gender; return `{ row_index, field, message }` errors
+- [x] T8: Implement row validator — check required fields, date formats, gender; return `{ row_index, field, message }` errors
 - [ ] T9: Implement intra-batch duplicate detection — within parsed rows, detect duplicate `passport_number` entries
 - [ ] T10: Wire `parse_and_validate` — call parser → validator → duplicate check → store valid rows in Redis → return preview
 

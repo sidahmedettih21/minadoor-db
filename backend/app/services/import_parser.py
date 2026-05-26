@@ -2,6 +2,7 @@ from typing import Optional
 import csv
 import io
 import openpyxl
+from datetime import datetime
 
 
 HEADER_ALIASES: dict[str, dict[str, str]] = {
@@ -177,3 +178,65 @@ def parse_xlsx(file_content: bytes) -> list[dict]:
 
     wb.close()
     return result
+
+
+DATE_FORMATS = ["%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"]
+
+
+def _parse_date(value: str) -> datetime | None:
+    raw = value.strip()
+    if not raw:
+        return None
+    for fmt in DATE_FORMATS:
+        try:
+            return datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+REQUIRED_FIELDS = {"surname", "given_name", "father_name", "passport_number", "nationality", "travel_type_id", "travel_date"}
+DATE_FIELDS = {"travel_date", "date_of_birth", "passport_issue_date", "passport_expiry"}
+
+
+def validate_rows(rows: list[dict]) -> tuple[list[dict], list[dict]]:
+    valid_rows: list[dict] = []
+    errors: list[dict] = []
+
+    for idx, row in enumerate(rows):
+        row_errors: list[dict] = []
+
+        for field in REQUIRED_FIELDS:
+            val = row.get(field, "")
+            if not val or (isinstance(val, str) and not val.strip()):
+                row_errors.append({
+                    "row": idx,
+                    "field": field,
+                    "message": f"{field} is required",
+                })
+
+        gender = row.get("gender", "")
+        if gender and isinstance(gender, str) and gender.strip():
+            if gender.strip().upper() not in ("M", "F"):
+                row_errors.append({
+                    "row": idx,
+                    "field": "gender",
+                    "message": "Gender must be M or F",
+                })
+
+        for field in DATE_FIELDS:
+            val = row.get(field, "")
+            if val and isinstance(val, str) and val.strip():
+                if _parse_date(val) is None:
+                    row_errors.append({
+                        "row": idx,
+                        "field": field,
+                        "message": f"Invalid date format for {field}",
+                    })
+
+        if row_errors:
+            errors.extend(row_errors)
+        else:
+            valid_rows.append(row)
+
+    return valid_rows, errors

@@ -2,7 +2,8 @@ import pytest
 import os
 import io
 import openpyxl
-from app.services.import_parser import HEADER_ALIASES, resolve_field, parse_csv, parse_xlsx
+from datetime import date
+from app.services.import_parser import HEADER_ALIASES, resolve_field, parse_csv, parse_xlsx, validate_rows
 
 
 class TestResolveField:
@@ -383,3 +384,130 @@ class TestParseXlsx:
         result = parse_xlsx(content)
         assert result[0]["father_name"] == "Hassan"
         assert result[0]["mother_name"] == "Fatima"
+
+
+class TestValidateRows:
+    def _valid_row(self, **overrides) -> dict:
+        row = {
+            "surname": "Smith",
+            "given_name": "John",
+            "father_name": "Robert",
+            "passport_number": "AB1234567",
+            "nationality": "USA",
+            "travel_type_id": "umrah",
+            "travel_date": "2027-12-01",
+        }
+        row.update(overrides)
+        return row
+
+    def test_valid_row_no_errors(self):
+        valid, errors = validate_rows([self._valid_row()])
+        assert len(valid) == 1
+        assert errors == []
+
+    def test_missing_surname(self):
+        valid, errors = validate_rows([self._valid_row(surname="")])
+        assert len(valid) == 0
+        assert any(e["field"] == "surname" for e in errors)
+
+    def test_missing_given_name(self):
+        valid, errors = validate_rows([self._valid_row(given_name="")])
+        assert any(e["field"] == "given_name" for e in errors)
+
+    def test_missing_father_name(self):
+        valid, errors = validate_rows([self._valid_row(father_name="")])
+        assert any(e["field"] == "father_name" for e in errors)
+
+    def test_missing_passport_number(self):
+        valid, errors = validate_rows([self._valid_row(passport_number="")])
+        assert any(e["field"] == "passport_number" for e in errors)
+
+    def test_missing_nationality(self):
+        valid, errors = validate_rows([self._valid_row(nationality="")])
+        assert any(e["field"] == "nationality" for e in errors)
+
+    def test_missing_travel_type(self):
+        valid, errors = validate_rows([self._valid_row(travel_type_id="")])
+        assert any(e["field"] == "travel_type_id" for e in errors)
+
+    def test_missing_travel_date(self):
+        valid, errors = validate_rows([self._valid_row(travel_date="")])
+        assert any(e["field"] == "travel_date" for e in errors)
+
+    def test_invalid_date_format(self):
+        valid, errors = validate_rows([self._valid_row(travel_date="not-a-date")])
+        assert any("date" in e["message"].lower() for e in errors)
+
+    def test_valid_date_formats(self):
+        valid, errors = validate_rows([self._valid_row(travel_date="01/06/2027")])
+        assert errors == []
+
+    def test_valid_date_dd_mm_yyyy(self):
+        valid, errors = validate_rows([self._valid_row(travel_date="15/03/2027")])
+        assert errors == []
+
+    def test_valid_date_mm_dd_yyyy(self):
+        valid, errors = validate_rows([self._valid_row(travel_date="03/15/2027")])
+        assert errors == []
+
+    def test_invalid_gender(self):
+        valid, errors = validate_rows([self._valid_row(gender="X")])
+        assert any(e["field"] == "gender" for e in errors)
+
+    def test_valid_gender_male(self):
+        valid, errors = validate_rows([self._valid_row(gender="M")])
+        assert errors == []
+
+    def test_valid_gender_female(self):
+        valid, errors = validate_rows([self._valid_row(gender="F")])
+        assert errors == []
+
+    def test_valid_gender_lowercase(self):
+        valid, errors = validate_rows([self._valid_row(gender="m")])
+        assert errors == []
+
+    def test_gender_empty_is_ok(self):
+        valid, errors = validate_rows([self._valid_row(gender="")])
+        assert errors == []
+
+    def test_optional_fields_empty_are_ok(self):
+        row = self._valid_row(mother_name="", date_of_birth="", passport_issue_date="", passport_expiry="", payment_method="", notes="", gender="")
+        valid, errors = validate_rows([row])
+        assert errors == []
+
+    def test_multiple_errors_in_one_row(self):
+        valid, errors = validate_rows([self._valid_row(surname="", gender="X", travel_date="bad")])
+        assert len(valid) == 0
+        fields = {e["field"] for e in errors}
+        assert "surname" in fields
+        assert "gender" in fields
+        assert "travel_date" in fields
+
+    def test_mixed_valid_and_invalid_rows(self):
+        rows = [
+            self._valid_row(),
+            self._valid_row(surname="", passport_number=""),
+            self._valid_row(),
+        ]
+        valid, errors = validate_rows(rows)
+        assert len(valid) == 2
+        assert len(errors) >= 2
+
+    def test_empty_row_list(self):
+        valid, errors = validate_rows([])
+        assert valid == []
+        assert errors == []
+
+    def test_error_has_row_index(self):
+        valid, errors = validate_rows([
+            self._valid_row(),
+            self._valid_row(surname=""),
+        ])
+        assert errors[0]["row"] == 1  # second row (0-indexed)
+
+    def test_error_has_field_and_message(self):
+        valid, errors = validate_rows([self._valid_row(surname="")])
+        e = errors[0]
+        assert "row" in e
+        assert "field" in e
+        assert "message" in e
