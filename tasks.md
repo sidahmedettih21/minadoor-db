@@ -27,7 +27,7 @@
 
 ## Phase 5: Test Fixtures & Test Cases [√]
 
-- [ ] T14: Create test fixtures — `valid_en.xlsx` (add), `partial_errors.csv`, `duplicates.csv`, `empty.csv`
+- [x] T14: Create test fixtures — `valid_en.xlsx` (add), `partial_errors.csv`, `duplicates.csv`, `empty.csv`
 - [ ] T15: Unit test — CSV parser with valid and malformed files
 - [ ] T16: Unit test — XLSX parser with valid and malformed files
 - [ ] T17: Unit test — row validator: missing fields, bad dates, bad gender
