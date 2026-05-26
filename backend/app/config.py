@@ -7,6 +7,7 @@ class Settings:
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://redis:6379/0")
     CORS_ORIGINS: list = os.getenv("CORS_ORIGINS", "http://localhost").split(",")
     JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "HS256")
+    ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 15))
     REFRESH_TOKEN_EXPIRE_DAYS: int = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", 7))
     UPLOAD_DIR: str = os.getenv("UPLOAD_DIR", "./uploads")

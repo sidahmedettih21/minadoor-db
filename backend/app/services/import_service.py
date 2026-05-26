@@ -1,20 +1,46 @@
 from sqlalchemy import select
 from app.database import AsyncSessionLocal
+from app.dependencies import redis_client
+from app.logger import logger
 from app.models import Client
 from app.schemas import ClientCreate
+from app.services.import_parser import parse_csv, parse_xlsx, validate_rows, detect_intra_batch_duplicates
 from typing import List
+import json
 import uuid
 
 
 async def parse_and_validate(file_content: bytes, filename: str) -> dict:
-    # placeholder – actual import logic here
-    # Returns validation_id, rows, errors
+    ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
+
+    if ext == "csv":
+        parsed = parse_csv(file_content)
+    elif ext in ("xlsx", "xls"):
+        parsed = parse_xlsx(file_content)
+    else:
+        raise ValueError(f"Unsupported file type: .{ext}")
+
+    total_rows = len(parsed)
+    validated, val_errors = validate_rows(parsed)
+    deduped, dup_errors = detect_intra_batch_duplicates(validated)
+    all_errors = val_errors + dup_errors
+
+    validation_id = str(uuid.uuid4())
+    try:
+        await redis_client.setex(
+            f"import:{validation_id}",
+            1800,
+            json.dumps({"rows": deduped}),
+        )
+    except Exception:
+        logger.warning("Redis unavailable, skipping cache for import preview")
+
     return {
-        "validation_id": str(uuid.uuid4()),
-        "total_rows": 0,
-        "valid_rows": 0,
-        "errors": [],
-        "preview_data": [],
+        "validation_id": validation_id,
+        "total_rows": total_rows,
+        "valid_rows": len(deduped),
+        "errors": all_errors,
+        "preview_data": deduped[:50],
     }
 
 
