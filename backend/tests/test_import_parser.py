@@ -3,7 +3,7 @@ import os
 import io
 import openpyxl
 from datetime import date
-from app.services.import_parser import HEADER_ALIASES, resolve_field, parse_csv, parse_xlsx, validate_rows
+from app.services.import_parser import HEADER_ALIASES, resolve_field, parse_csv, parse_xlsx, validate_rows, detect_intra_batch_duplicates
 
 
 class TestResolveField:
@@ -507,6 +507,75 @@ class TestValidateRows:
 
     def test_error_has_field_and_message(self):
         valid, errors = validate_rows([self._valid_row(surname="")])
+        e = errors[0]
+        assert "row" in e
+        assert "field" in e
+        assert "message" in e
+
+
+class TestDetectIntraBatchDuplicates:
+    def _row(self, passport: str, **kw) -> dict:
+        r = {"surname": "X", "given_name": "Y", "father_name": "Z", "nationality": "US",
+             "travel_type_id": "umrah", "travel_date": "2027-12-01", "passport_number": passport}
+        r.update(kw)
+        return r
+
+    def test_no_duplicates_returns_all(self):
+        rows = [self._row("A1"), self._row("B2"), self._row("C3")]
+        unique, errors = detect_intra_batch_duplicates(rows)
+        assert len(unique) == 3
+        assert errors == []
+
+    def test_single_duplicate_flagged(self):
+        rows = [self._row("A1"), self._row("A1")]
+        unique, errors = detect_intra_batch_duplicates(rows)
+        assert len(unique) == 1
+        assert len(errors) == 1
+        assert errors[0]["row"] == 1
+        assert errors[0]["field"] == "passport_number"
+        assert "A1" in errors[0]["message"]
+
+    def test_first_instance_kept(self):
+        rows = [self._row("A1", surname="First"), self._row("A1", surname="Second")]
+        unique, errors = detect_intra_batch_duplicates(rows)
+        assert unique[0]["surname"] == "First"
+
+    def test_triplicate_keeps_one_flags_two(self):
+        rows = [self._row("A1"), self._row("A1"), self._row("A1")]
+        unique, errors = detect_intra_batch_duplicates(rows)
+        assert len(unique) == 1
+        assert len(errors) == 2
+
+    def test_multiple_distinct_passports_not_flagged(self):
+        rows = [self._row("A1"), self._row("B2"), self._row("A1"), self._row("C3")]
+        unique, errors = detect_intra_batch_duplicates(rows)
+        assert len(unique) == 3
+        assert len(errors) == 1
+        assert errors[0]["row"] == 2
+
+    def test_empty_list(self):
+        unique, errors = detect_intra_batch_duplicates([])
+        assert unique == []
+        assert errors == []
+
+    def test_missing_passport_field_skipped(self):
+        rows = [{"surname": "X", "given_name": "Y", "father_name": "Z"}]
+        unique, errors = detect_intra_batch_duplicates(rows)
+        assert len(unique) == 1
+        assert errors == []
+
+    def test_empty_passport_value_not_flagged_as_duplicate(self):
+        rows = [{"passport_number": "", "surname": "A", "given_name": "B", "father_name": "C",
+                 "nationality": "US", "travel_type_id": "umrah", "travel_date": "2027-12-01"},
+                {"passport_number": "", "surname": "D", "given_name": "E", "father_name": "F",
+                 "nationality": "US", "travel_type_id": "umrah", "travel_date": "2027-12-01"}]
+        unique, errors = detect_intra_batch_duplicates(rows)
+        assert len(unique) == 2
+        assert errors == []
+
+    def test_error_format(self):
+        rows = [self._row("A1"), self._row("A1")]
+        unique, errors = detect_intra_batch_duplicates(rows)
         e = errors[0]
         assert "row" in e
         assert "field" in e

@@ -240,3 +240,28 @@ def validate_rows(rows: list[dict]) -> tuple[list[dict], list[dict]]:
             valid_rows.append(row)
 
     return valid_rows, errors
+
+
+def detect_intra_batch_duplicates(rows: list[dict]) -> tuple[list[dict], list[dict]]:
+    seen: set[str] = set()
+    unique_rows: list[dict] = []
+    errors: list[dict] = []
+
+    for idx, row in enumerate(rows):
+        passport = row.get("passport_number", "")
+        if not passport or not isinstance(passport, str) or not passport.strip():
+            unique_rows.append(row)
+            continue
+
+        normalized = passport.strip()
+        if normalized in seen:
+            errors.append({
+                "row": idx,
+                "field": "passport_number",
+                "message": f"Duplicate passport number: {normalized}",
+            })
+        else:
+            seen.add(normalized)
+            unique_rows.append(row)
+
+    return unique_rows, errors
