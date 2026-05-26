@@ -45,20 +45,34 @@ async def parse_and_validate(file_content: bytes, filename: str) -> dict:
 
 
 async def commit_import(validation_id: str, rows: List[ClientCreate]) -> dict:
+    if validation_id:
+        try:
+            cached = await redis_client.get(f"import:{validation_id}")
+            if cached:
+                rows = [ClientCreate(**r) for r in json.loads(cached)["rows"]]
+        except Exception:
+            logger.warning("Failed to load rows from Redis cache")
+
     async with AsyncSessionLocal() as session:
-        existing_passports = set(
-            (await session.execute(
-                select(Client.passport_number).where(Client.passport_number.in_([r.passport_number for r in rows]))
-            )).scalars().all()
-        )
-        new_clients = []
-        skipped = 0
-        for row in rows:
-            if row.passport_number in existing_passports:
-                skipped += 1
-                continue
-            client = Client(**row.model_dump())
-            session.add(client)
-            new_clients.append(client)
-        await session.commit()
-        return {"imported_count": len(new_clients), "duplicates_skipped": skipped}
+        try:
+            existing_passports = set(
+                (await session.execute(
+                    select(Client.passport_number).where(
+                        Client.passport_number.in_([r.passport_number for r in rows])
+                    )
+                )).scalars().all()
+            )
+            new_clients = []
+            skipped = 0
+            for row in rows:
+                if row.passport_number in existing_passports:
+                    skipped += 1
+                    continue
+                client = Client(**row.model_dump())
+                session.add(client)
+                new_clients.append(client)
+            await session.commit()
+            return {"imported_count": len(new_clients), "duplicates_skipped": skipped}
+        except Exception:
+            await session.rollback()
+            raise

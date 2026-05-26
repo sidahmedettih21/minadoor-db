@@ -1,8 +1,8 @@
 import pytest
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, AsyncMock, MagicMock
 import io
 import openpyxl
-from app.services.import_service import parse_and_validate
+from app.services.import_service import parse_and_validate, commit_import
 
 
 class TestParseAndValidate:
@@ -86,3 +86,105 @@ class TestParseAndValidate:
         result = await parse_and_validate(many_rows, "test.csv")
         assert result["total_rows"] == 60
         assert len(result["preview_data"]) == 50
+
+
+class TestCommitImport:
+    @pytest.fixture
+    def mock_db_session(self):
+        session = AsyncMock()
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = []
+        session.execute.return_value = result
+        session.__aenter__.return_value = session
+        session.__aexit__ = AsyncMock(return_value=None)
+        session.add = MagicMock()
+        session.rollback = AsyncMock()
+        return session
+
+    @pytest.mark.anyio
+    async def test_imports_new_clients(self, mock_db_session):
+        from app.schemas import ClientCreate
+        from datetime import date
+        rows = [
+            ClientCreate(surname="Smith", given_name="John", father_name="Robert",
+                         passport_number="AB123", nationality="US", travel_type_id=1,
+                         travel_date=date(2027, 12, 1)),
+        ]
+        with patch("app.services.import_service.AsyncSessionLocal", return_value=mock_db_session):
+            result = await commit_import("", rows)
+        assert result["imported_count"] == 1
+        assert result["duplicates_skipped"] == 0
+        mock_db_session.add.assert_called_once()
+        mock_db_session.commit.assert_awaited_once()
+
+    @pytest.mark.anyio
+    async def test_skips_existing_passports(self, mock_db_session):
+        from app.schemas import ClientCreate
+        from datetime import date
+        mock_db_session.execute.return_value.scalars.return_value.all.return_value = ["AB123"]
+        rows = [
+            ClientCreate(surname="Smith", given_name="John", father_name="Robert",
+                         passport_number="AB123", nationality="US", travel_type_id=1,
+                         travel_date=date(2027, 12, 1)),
+            ClientCreate(surname="Doe", given_name="Jane", father_name="Jim",
+                         passport_number="XY456", nationality="UK", travel_type_id=2,
+                         travel_date=date(2027, 6, 15)),
+        ]
+        with patch("app.services.import_service.AsyncSessionLocal", return_value=mock_db_session):
+            result = await commit_import("", rows)
+        assert result["imported_count"] == 1
+        assert result["duplicates_skipped"] == 1
+
+    @pytest.mark.anyio
+    async def test_rollback_on_db_error(self, mock_db_session):
+        async def raise_db_error(*args, **kwargs):
+            raise Exception("DB failure")
+        mock_db_session.commit = raise_db_error
+        from app.schemas import ClientCreate
+        from datetime import date
+        rows = [
+            ClientCreate(surname="Smith", given_name="John", father_name="Robert",
+                         passport_number="AB123", nationality="US", travel_type_id=1,
+                         travel_date=date(2027, 12, 1)),
+        ]
+        with patch("app.services.import_service.AsyncSessionLocal", return_value=mock_db_session):
+            with pytest.raises(Exception, match="DB failure"):
+                await commit_import("", rows)
+        mock_db_session.rollback.assert_awaited_once()
+
+    @pytest.mark.anyio
+    async def test_loads_from_redis_when_validation_id_provided(self, mock_db_session):
+        from app.schemas import ClientCreate
+        cached = b'{"rows": [{"surname": "Cache", "given_name": "Test", "father_name": "Foo", "passport_number": "CC123", "nationality": "FR", "travel_type_id": 1, "travel_date": "2027-12-01"}]}'
+        with patch("app.services.import_service.redis_client.get", new_callable=AsyncMock, return_value=cached):
+            with patch("app.services.import_service.AsyncSessionLocal", return_value=mock_db_session):
+                result = await commit_import("test-vid", [])
+        assert result["imported_count"] == 1
+        assert result["duplicates_skipped"] == 0
+
+    @pytest.mark.anyio
+    async def test_falls_back_to_passed_rows_when_redis_empty(self, mock_db_session):
+        from app.schemas import ClientCreate
+        from datetime import date
+        with patch("app.services.import_service.redis_client.get", new_callable=AsyncMock, return_value=None):
+            with patch("app.services.import_service.AsyncSessionLocal", return_value=mock_db_session):
+                rows = [
+                    ClientCreate(surname="Fallback", given_name="User", father_name="P",
+                                 passport_number="FB001", nationality="DE", travel_type_id=1,
+                                 travel_date=date(2027, 12, 1)),
+                ]
+                result = await commit_import("test-vid", rows)
+        assert result["imported_count"] == 1
+
+    @pytest.mark.anyio
+    async def test_response_keys(self, mock_db_session):
+        from app.schemas import ClientCreate
+        from datetime import date
+        rows = [
+            ClientCreate(surname="Smith", given_name="John", father_name="Robert",
+                         passport_number="AB123", nationality="US", travel_type_id=1,
+                         travel_date=date(2027, 12, 1)),
+        ]
+        with patch("app.services.import_service.AsyncSessionLocal", return_value=mock_db_session):
+            result = await commit_import("", rows)
+        assert list(result.keys()) == ["imported_count", "duplicates_skipped"]
