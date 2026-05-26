@@ -1,9 +1,10 @@
 import json
 import os
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import FileResponse
 from app.dependencies import get_current_active_user, redis_client
 from app.schemas import ExportStatus
+from app.services.export_service import cleanup_export_file
 
 router = APIRouter(prefix="/api/v1/exports", tags=["exports"])
 
@@ -29,6 +30,7 @@ async def export_status(
 @router.get("/{job_id}/download")
 async def export_download(
     job_id: str,
+    background_tasks: BackgroundTasks,
     current_user=Depends(get_current_active_user),
 ):
     raw = await redis_client.get(f"export:{job_id}")
@@ -46,6 +48,7 @@ async def export_download(
         "csv": "text/csv",
         "pdf": "application/pdf",
     }
+    background_tasks.add_task(cleanup_export_file, job_id, filepath, fmt)
     return FileResponse(
         path=filepath,
         media_type=media_types.get(fmt, "application/octet-stream"),

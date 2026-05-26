@@ -128,3 +128,19 @@ tr:nth-child(even){{background:#f8fafc}}
             3600,
             json.dumps({"status": "failed", "error": str(exc)}),
         )
+
+
+async def cleanup_export_file(job_id: str, filepath: str, fmt: str):
+    try:
+        if os.path.exists(filepath):
+            os.remove(filepath)
+    except Exception:
+        pass
+    try:
+        await redis_client.setex(
+            f"export:{job_id}",
+            300,
+            json.dumps({"status": "downloaded"}),
+        )
+    except Exception:
+        pass
