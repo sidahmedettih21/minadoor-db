@@ -14,20 +14,22 @@
 - [x] T7: Implement XLSX parser — read file with `openpyxl`, iterate rows, map headers via alias map, yield dicts
 - [x] T8: Implement row validator — check required fields, date formats, gender; return `{ row_index, field, message }` errors
 - [x] T9: Implement intra-batch duplicate detection — within parsed rows, detect duplicate `passport_number` entries
-- [ ] T10: Wire `parse_and_validate` — call parser → validator → duplicate check → store valid rows in Redis → return preview
+- [x] T10: Wire `parse_and_validate` — call parser → validator → duplicate check → store valid rows in Redis → return preview
 
 ## Phase 3: Import Confirmation & Transaction [∞]
 
-- [ ] T11: Rewrite `commit_import` — single transaction, read rows from body, check DB for existing passports, INSERT new, rollback on failure, return correct response keys
-- [ ] T12: Add cross-batch duplicate check — query non-archived clients by passport_number set, skip existing
+- [x] T11: Rewrite `commit_import` — single transaction, read rows from body, check DB for existing passports, INSERT new, rollback on failure, return correct response keys
+- [x] T12: Add cross-batch duplicate check — query non-archived clients by passport_number set, skip existing
 
 ## Phase 4: Export Hardening [^]
 
-- [ ] T13: Fix export temp file cleanup — add `os.remove(filepath)` after serving download in `exports.py`, update Redis status to `downloaded`
+- [x] T13: Fix export temp file cleanup — add `os.remove(filepath)` after serving download in `exports.py`, update Redis status to `downloaded`
 
 ## Phase 5: Test Fixtures & Test Cases [√]
 
 - [x] T14: Create test fixtures — `valid_en.xlsx` (add), `partial_errors.csv`, `duplicates.csv`, `empty.csv`
+# T15-T18 are Frontend UI tasks — NOT yet implemented.
+# The 106 parser tests cover the backend pipeline, not the UI.
 - [ ] T15: Unit test — CSV parser with valid and malformed files
 - [ ] T16: Unit test — XLSX parser with valid and malformed files
 - [ ] T17: Unit test — row validator: missing fields, bad dates, bad gender

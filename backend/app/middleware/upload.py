@@ -1,6 +1,5 @@
 from starlette.middleware.base import BaseHTTPMiddleware
-from fastapi import Request, HTTPException
-import magic
+from fastapi import Request
 
 class UploadValidationMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):

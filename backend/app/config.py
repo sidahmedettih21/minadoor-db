@@ -2,8 +2,8 @@ import os
 from functools import lru_cache
 
 class Settings:
-    SECRET_KEY: str = os.environ["SECRET_KEY"]
-    DATABASE_URL: str = os.environ["DATABASE_URL"]
+    SECRET_KEY: str = os.getenv("SECRET_KEY", "dev-secret-change-in-production")
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://redis:6379/0")
     CORS_ORIGINS: list = os.getenv("CORS_ORIGINS", "http://localhost").split(",")
     JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "HS256")

@@ -110,6 +110,29 @@ class UserResponse(BaseModel):
     preferred_lang: str
     is_active: bool
 
+class PaginatedClients(BaseModel):
+    total: int
+    page: int
+    limit: int
+    pages: int
+    items: list[ClientResponse]
+
+class ExportStatus(BaseModel):
+    job_id: str
+    status: str
+    error: Optional[str] = None
+    download_url: Optional[str] = None
+
+class ExportRequest(BaseModel):
+    format: str
+    search: Optional[str] = None
+    travel_type: Optional[str] = None
+    status: Optional[str] = None
+    gender: Optional[str] = None
+    travel_date_from: Optional[date] = None
+    travel_date_to: Optional[date] = None
+    header_lang: str = "en"
+
 class ImportPreview(BaseModel):
     validation_id: str
     total_rows: int

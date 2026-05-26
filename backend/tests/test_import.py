@@ -2,7 +2,7 @@ import pytest
 from httpx import AsyncClient
 from app.main import app
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_import_preview_route_ok():
     """Frontend calls /clients/import but backend route is /clients/import/preview.
     Test correct route exists and old wrong route returns 404."""
@@ -15,7 +15,7 @@ async def test_import_preview_route_ok():
         resp = await ac.post("/api/v1/clients/import")
         assert resp.status_code == 404, "Old /clients/import route should not exist"
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_import_confirm_accepts_body():
     """Confirm endpoint must accept { validation_id, rows } in POST body, not query params."""
     async with AsyncClient(app=app, base_url="http://test") as ac:
