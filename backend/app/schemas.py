@@ -1,4 +1,4 @@
-from pydantic import BaseModel, validator, EmailStr
+from pydantic import BaseModel, field_validator, EmailStr, ConfigDict, ValidationInfo
 from typing import Optional, List
 from datetime import date
 import re
@@ -9,8 +9,9 @@ class UserCreate(BaseModel):
     full_name: str
     role: str = "agent"
 
-    @validator("password")
-    def password_strength(cls, v):
+    @field_validator("password")
+    @classmethod
+    def password_strength(cls, v: str) -> str:
         if len(v) < 8:
             raise ValueError("Password must be at least 8 characters")
         if not re.search(r"[A-Z]", v):
@@ -39,20 +40,23 @@ class ClientBase(BaseModel):
     travel_date: date
     notes: Optional[str] = None
 
-    @validator("gender")
-    def validate_gender(cls, v):
+    @field_validator("gender")
+    @classmethod
+    def validate_gender(cls, v: Optional[str]) -> Optional[str]:
         if v and v.upper() not in ("M", "F"):
             raise ValueError("Gender must be M or F")
         return v.upper() if v else v
 
-    @validator("passport_expiry")
-    def expiry_after_issue(cls, v, values):
-        if v and values.get("passport_issue_date") and v < values["passport_issue_date"]:
+    @field_validator("passport_expiry")
+    @classmethod
+    def expiry_after_issue(cls, v: Optional[date], info: ValidationInfo) -> Optional[date]:
+        if v and info.data.get("passport_issue_date") and v < info.data["passport_issue_date"]:
             raise ValueError("Expiry must be after issue date")
         return v
 
-    @validator("travel_date")
-    def travel_not_past(cls, v):
+    @field_validator("travel_date")
+    @classmethod
+    def travel_not_past(cls, v: date) -> date:
         if v < date.today():
             raise ValueError("Travel date cannot be in the past")
         return v
@@ -84,8 +88,7 @@ class ClientResponse(ClientBase):
     created_by: Optional[int] = None
     archived: bool
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 class TravelTypeCreate(BaseModel):
     code: str
@@ -96,6 +99,8 @@ class TravelTypeCreate(BaseModel):
 class TravelTypeResponse(TravelTypeCreate):
     id: int
     is_active: bool
+
+    model_config = ConfigDict(from_attributes=True)
 
 class Token(BaseModel):
     access_token: str
@@ -109,6 +114,8 @@ class UserResponse(BaseModel):
     role: str
     preferred_lang: str
     is_active: bool
+
+    model_config = ConfigDict(from_attributes=True)
 
 class PaginatedClients(BaseModel):
     total: int
