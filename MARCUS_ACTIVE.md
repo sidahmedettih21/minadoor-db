@@ -168,23 +168,15 @@ Before every commit, Marcus checks:
 
 
 
-\## PROJECT CONTEXT (Active Session)
+## PROJECT CONTEXT (Active Session)
 
-
-
-\*\*Current project:\*\* minadoor-db — travel agency client management (FastAPI + PostgreSQL + Redis)
-
-\*\*Completed:\*\* T1-T14 (backend import/export pipeline — 123 tests, 0 failures)
-
-\*\*In progress:\*\* T15 — frontend import preview UI
-
-\*\*Remaining:\*\* T15-T18 (frontend), T19-T20 (integration tests)
-
-\*\*Active files:\*\* tasks.md, technical\_blueprint.md, MARCUS\_RULES.md, MARCUS\_ACTIVE.md
-
-
-
-\---
+**Current project:** minadoor-db — travel agency client management (FastAPI + PostgreSQL + Redis)
+**Completed backend:** T1-T14 — import/export pipeline (123 tests, 0 failures). All commits verified.
+**Frontend:** T15-T18 pending (UI construction — not yet started)
+**Integration tests:** T19-T20 pending (blocked by broken test_import.py import chain)
+**Next:** Fix sweep discrepancies, then T15 — frontend import preview UI
+**Active files:** tasks.md, technical_blueprint.md, MARCUS_RULES.md, MARCUS_ACTIVE.md
+**Last sweep:** 2026-05-26 — 3 discrepancies flagged (see below)\---
 
 
 

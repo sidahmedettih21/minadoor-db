@@ -23,6 +23,8 @@ class TravelType(Base):
     name_ar = Column(String(100), nullable=False)
     is_active = Column(Boolean, default=True)
 
+    clients = relationship("Client", back_populates="travel_type")
+
 class Client(Base):
     __tablename__ = "clients"
     id = Column(Integer, primary_key=True, index=True)
@@ -47,6 +49,7 @@ class Client(Base):
     archived = Column(Boolean, default=False)
 
     creator = relationship("User")
+    travel_type = relationship("TravelType", back_populates="clients")
 
     __table_args__ = (
         Index("idx_clients_passport", "passport_number", postgresql_where=text("NOT archived")),

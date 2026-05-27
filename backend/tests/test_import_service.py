@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 import io
+import json
 import openpyxl
 from app.services.import_service import parse_and_validate, commit_import
 
@@ -9,7 +10,7 @@ class TestParseAndValidate:
     VALID_CSV = (
         b"Surname,Given Name,Father Name,Passport Number,Nationality,"
         b"Travel Type,Travel Date\n"
-        b"Smith,John,Robert,AB123456,USA,umrah,2027-12-01\n"
+        b"Smith,John,Robert,AB123456,USA,cash_umrah,2027-12-01\n"
     )
 
     @pytest.mark.anyio
@@ -30,7 +31,7 @@ class TestParseAndValidate:
         csv = (
             b"Surname,Given Name,Father Name,Passport Number,Nationality,"
             b"Travel Type,Travel Date\n"
-            b",John,Robert,AB123456,USA,umrah,2027-12-01\n"
+            b",John,Robert,AB123456,USA,cash_umrah,2027-12-01\n"
         )
         result = await parse_and_validate(csv, "test.csv")
         assert result["valid_rows"] == 0
@@ -43,8 +44,8 @@ class TestParseAndValidate:
         csv = (
             b"Surname,Given Name,Father Name,Passport Number,Nationality,"
             b"Travel Type,Travel Date\n"
-            b"Smith,John,Robert,AB123456,USA,umrah,2027-12-01\n"
-            b"Doe,Jane,Jim,AB123456,UK,visa,2027-06-01\n"
+            b"Smith,John,Robert,AB123456,USA,cash_umrah,2027-12-01\n"
+            b"Doe,Jane,Jim,AB123456,UK,organised_travel,2027-06-01\n"
         )
         result = await parse_and_validate(csv, "test.csv")
         assert result["valid_rows"] == 1
@@ -58,7 +59,7 @@ class TestParseAndValidate:
         ws = wb.active
         ws.append(["Surname", "Given Name", "Father Name", "Passport Number",
                     "Nationality", "Travel Type", "Travel Date"])
-        ws.append(["Doe", "Jane", "Jim", "XY987654", "UK", "visa", "2027-06-15"])
+        ws.append(["Doe", "Jane", "Jim", "XY987654", "UK", "organised_travel", "2027-06-15"])
         buf = io.BytesIO()
         wb.save(buf)
         wb.close()
@@ -80,7 +81,7 @@ class TestParseAndValidate:
     async def test_preview_limited_to_50_rows(self, mock_setex):
         header = b"Surname,Given Name,Father Name,Passport Number,Nationality,Travel Type,Travel Date\n"
         many_rows = header + b"".join(
-            f"Doe{i},Jane,Foo,P{i:06d},US,umrah,2027-06-01\n".encode()
+            f"Doe{i},Jane,Foo,P{i:06d},US,cash_umrah,2027-06-01\n".encode()
             for i in range(60)
         )
         result = await parse_and_validate(many_rows, "test.csv")
@@ -102,6 +103,81 @@ class TestParseAndValidate:
         assert len(result["errors"]) == 1
         assert result["errors"][0]["field"] == "passport_number"
         assert "already exists" in result["errors"][0]["message"].lower()
+
+    @pytest.mark.anyio
+    @patch("app.services.import_service.redis_client.setex", new_callable=AsyncMock)
+    async def test_row_indices_are_original_spreadsheet_positions(self, mock_setex):
+        csv = (
+            b"Surname,Given Name,Father Name,Passport Number,Nationality,"
+            b"Travel Type,Travel Date\n"
+            b"Row0,OK,F,PP0,US,cash_umrah,2027-12-01\n"
+            b"Row1,OK,F,PP1,US,cash_umrah,2027-12-01\n"
+            b",SurnameEmpty,F,PP2,US,cash_umrah,2027-12-01\n"
+            b"Row3,OK,F,PP3,US,cash_umrah,2027-12-01\n"
+            b"Row4,OK,F,PP4,US,cash_umrah,2027-12-01\n"
+        )
+        result = await parse_and_validate(csv, "test.csv")
+        assert result["total_rows"] == 5
+        assert result["valid_rows"] == 4
+        surname_errors = [e for e in result["errors"] if e["field"] == "surname"]
+        assert len(surname_errors) == 1
+        assert surname_errors[0]["row"] == 2
+
+    @pytest.mark.anyio
+    @patch("app.services.import_service.redis_client.setex", new_callable=AsyncMock)
+    async def test_row_index_after_travel_type_filter(self, mock_setex):
+        csv = (
+            b"Surname,Given Name,Father Name,Passport Number,Nationality,"
+            b"Travel Type,Travel Date\n"
+            b"Row0,OK,F,PP0,US,cash_umrah,2027-12-01\n"
+            b"Row1,OK,F,PP1,US,bogus_type,2027-12-01\n"
+        )
+        result = await parse_and_validate(csv, "test.csv")
+        tt_errors = [e for e in result["errors"] if e["field"] == "travel_type_id"]
+        assert len(tt_errors) == 1
+        assert tt_errors[0]["row"] == 1
+
+    @pytest.mark.anyio
+    @patch("app.services.import_service.redis_client.setex", new_callable=AsyncMock)
+    async def test_cached_dates_normalized_to_iso(self, mock_setex):
+        csv = (
+            b"Surname,Given Name,Father Name,Passport Number,Nationality,"
+            b"Travel Type,Travel Date,Date of Birth\n"
+            b"Smith,John,Robert,AB123,USA,cash_umrah,15/06/2027,01/03/1990\n"
+        )
+        result = await parse_and_validate(csv, "test.csv")
+        assert result["valid_rows"] == 1
+        preview = result["preview_data"][0]
+        assert preview["travel_date"] == "2027-06-15"
+        assert preview["date_of_birth"] == "1990-03-01"
+
+        call_args = mock_setex.await_args.args
+        cached = json.loads(call_args[2])
+        assert cached["rows"][0]["travel_date"] == "2027-06-15"
+        assert cached["rows"][0]["date_of_birth"] == "1990-03-01"
+        assert cached["rows"][0]["surname"] == "Smith"
+
+    @pytest.mark.anyio
+    @patch("app.services.import_service.redis_client.setex", new_callable=AsyncMock)
+    async def test_commit_import_accepts_normalized_dates(self, mock_setex):
+        from app.dependencies import redis_client
+        from app.schemas import ClientCreate
+        from datetime import date
+        vid = "test-vid-normalized"
+        cached = b'{"rows": [{"surname": "Smith", "given_name": "John", "father_name": "Robert", "passport_number": "AB123", "nationality": "US", "travel_type_id": 1, "travel_date": "2027-06-15"}]}'
+        with patch("app.services.import_service.redis_client.get", new_callable=AsyncMock, return_value=cached):
+            session = AsyncMock()
+            session.__aenter__.return_value = session
+            session.__aexit__ = AsyncMock(return_value=None)
+            result = MagicMock()
+            result.scalars.return_value.all.return_value = []
+            session.execute.return_value = result
+            session.add = MagicMock()
+            session.rollback = AsyncMock()
+            with patch("app.services.import_service.AsyncSessionLocal", return_value=session):
+                result = await commit_import(vid, [])
+        assert result["imported_count"] == 1
+        assert result["duplicates_skipped"] == 0
 
     @pytest.mark.anyio
     @patch("app.services.import_service.redis_client.setex", new_callable=AsyncMock)

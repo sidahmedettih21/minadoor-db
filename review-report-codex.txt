@@ -1,0 +1,796 @@
+MINADOOR-DB PRODUCTION READINESS REVIEW
+Date: 2026-05-26
+Reviewer: Codex
+Repo: C:\Users\SellerPC\Documents\Work-Environment\projects\minadoor-db
+
+Verdict: NOT PRODUCTION READY.
+
+This is not a saleable production product yet. The codebase has working pieces, especially around import parsing tests, but the deployed app currently has critical security and functional blockers: authentication is disabled, login/admin bootstrap is broken, frontend-to-backend routing is inconsistent, core client/export endpoints can fail at runtime, and import/export handling is unsafe for real customer data.
+
+I did not apply fixes in this pass. I reviewed the repository and wrote this report as requested.
+
+
+1. REVIEW SCOPE
+---------------
+
+Reviewed:
+- README, technical blueprint, tasks, generated project reports
+- Docker Compose, backend Dockerfile, nginx config, scripts
+- FastAPI entrypoint, config, database, models, schemas, auth, dependencies
+- All routers
+- Import/export services and upload utilities
+- Frontend HTML, JavaScript, locales, static serving assumptions
+- Alembic migration
+- Backend tests and fixtures
+- Git state and tracked files
+
+Validation attempted:
+- Python compile check
+- Frontend JavaScript syntax check
+- Local tool availability checks for pytest, Docker, gitleaks, pip-audit
+- Secret-pattern grep
+- Manual contract/security review
+
+Important local limitation:
+- Docker is not installed/available on PATH in this environment.
+- `python` is not available on PATH.
+- Bundled Python exists but does not have FastAPI, SQLAlchemy, or pytest installed.
+- Therefore I could not run the full app, pytest suite, Alembic migration, or integration tests locally.
+
+
+2. EXECUTIVE FINDINGS
+---------------------
+
+P0 blockers:
+1. Authentication and refresh-token validation are disabled.
+2. Login and admin bootstrap are broken.
+3. nginx proxying and frontend API paths do not line up, so the served UI cannot reliably use the API.
+4. Client list/get/export code references a missing `Client.travel_type` relationship.
+5. Pydantic v2 response serialization is misconfigured; SQLAlchemy ORM responses are likely to fail.
+6. Secrets/default credentials and weak JWT defaults are present.
+7. PDF export uses an outdated vulnerable WeasyPrint version and interpolates user data into HTML without escaping.
+
+P1 blockers:
+1. Import confirm is incompatible with realistic import data and can silently truncate imports if Redis is unavailable.
+2. Duplicate passport enforcement is race-prone and not backed by a database uniqueness constraint.
+3. Export can be abused for memory/CPU exhaustion and spreadsheet formula injection.
+4. Tests do not cover deployed behavior because the database layer is globally mocked.
+5. Frontend admin workflows call endpoints that do not exist.
+6. Health checks, logging, request IDs, audit logging, and operational controls are insufficient.
+
+
+3. VALIDATION RESULTS
+---------------------
+
+Command/result summary:
+
+- `python -m pytest`
+  Result: failed before running. `python` is not recognized on PATH.
+
+- Bundled Python: `python.exe -m pytest`
+  Result: failed before running. `No module named pytest`.
+
+- Bundled Python: `python.exe -m compileall app`
+  Result: passed. Python source compiles syntactically.
+
+- Bundled Python import checks:
+  Result: FastAPI and SQLAlchemy are not installed in the bundled runtime; Pydantic is available as 2.13.4.
+
+- Bundled Node: `node --check frontend/js/app.js`
+  Result: passed. The JavaScript file parses.
+
+- `docker`, `gitleaks`, `pip-audit`
+  Result: not available on PATH.
+
+Observed Pydantic v2 behavior:
+- A minimal model using `class Config: orm_mode = True` did not validate object attributes under Pydantic v2. Pydantic warned that `orm_mode` was renamed to `from_attributes`. This directly applies to `ClientResponse` and likely to other ORM response models.
+
+Git/worktree note:
+- The worktree was already dirty before this report. Modified files include `backend/app/services/import_service.py`, `frontend/index.html`, `frontend/js/app.js`, locales, and `MARCUS_ACTIVE.md`.
+
+
+4. P0 FINDINGS
+--------------
+
+P0-1: Authentication is disabled in the backend.
+
+Evidence:
+- `backend/app/dependencies.py:39-45`
+- `backend/app/dependencies.py:55-57`
+
+`get_current_user()` ignores the bearer token and returns an admin SQLAlchemy object for every request. `get_refresh_token_user()` does the same. Every route depending on `get_current_active_user()` or `get_admin_user()` is effectively open as admin to anyone who can reach the API.
+
+Impact:
+- Any unauthenticated caller can list, create, modify, delete/archive clients.
+- Any unauthenticated caller can create users and travel types.
+- Refresh/logout flows do not validate token type, revocation, or user state.
+
+Required fix:
+- Restore real JWT decoding and user lookup.
+- Validate token type: access tokens only for normal requests, refresh tokens only for refresh/logout.
+- Check Redis blocklist for refresh token `jti`.
+- Enforce user `is_active`.
+- Add tests proving protected endpoints reject missing/invalid tokens.
+
+
+P0-2: The frontend is also hardcoded to auto-login as admin.
+
+Evidence:
+- `frontend/js/app.js:59-65`
+
+`initApp()` sets `isLoggedIn = true` and injects an admin user. This hides backend auth failures and makes the UI appear logged in without credentials.
+
+Impact:
+- Security testing through the UI is misleading.
+- Admin-only UI is exposed immediately.
+- It masks the fact that login is broken.
+
+Required fix:
+- Remove auto-login.
+- Initialize from a verified access token.
+- Implement token refresh and logout correctly.
+
+
+P0-3: Login is broken.
+
+Evidence:
+- `backend/app/routers/auth.py:16-20`
+- `frontend/js/app.js:131-135`
+- `backend/alembic/versions/001_initial.py:129-135`
+- `backend/manage.py:3`
+- `backend/manage.py:14-15`
+
+Problems:
+- Backend login uses `OAuth2PasswordRequestForm`, which expects form-encoded credentials.
+- Frontend sends JSON.
+- Backend does `db.get(User, form_data.username)` even though `username` is an email and `db.get()` looks up by primary key.
+- Migration seeds `admin@minadoor.com` with an invalid placeholder bcrypt hash.
+- `manage.py` imports nonexistent `async_session`; the actual factory is `AsyncSessionLocal`.
+- Docker entrypoint only runs Alembic and uvicorn; it never runs `manage.py`.
+
+Impact:
+- Real login cannot be trusted to work after auth is re-enabled.
+- The README default login is false.
+
+Required fix:
+- Query users by email with `select(User).where(User.email == form_data.username)`.
+- Either send OAuth2 form data from frontend or change backend contract to JSON.
+- Remove placeholder admin hash from migration or seed admin with a separate safe bootstrap command.
+- Fix `manage.py` to use `AsyncSessionLocal`.
+- Never print generated passwords into long-lived logs.
+
+
+P0-4: nginx strips `/api/`, breaking normal frontend API calls.
+
+Evidence:
+- `nginx/nginx.conf:7-8`
+- `frontend/js/app.js:172-180`
+- `frontend/js/app.js:131`
+- `frontend/js/app.js:155`
+- `frontend/js/app.js:432`
+
+Current nginx:
+`location /api/ { proxy_pass http://api:8000/; }`
+
+With this config, `/api/v1/clients` is forwarded upstream as `/v1/clients`, but FastAPI routes are mounted at `/api/v1/clients`. Most calls made through `api(path)` therefore 404 behind nginx.
+
+The login/logout/download code uses `/api/api/v1/*`, which works around the strip behavior accidentally, but the generic API helper does not.
+
+Impact:
+- Normal app served at port 80 cannot load clients, travel types, users, imports, exports, or stats reliably.
+
+Required fix:
+- Choose one contract:
+  - Preserve prefix: `proxy_pass http://api:8000;`
+  - Or remove `/api` from FastAPI route prefixes and frontend helper.
+- Remove all `/api/api/v1` frontend paths.
+- Add an integration test against nginx or at least an HTTP contract test for deployed URLs.
+
+
+P0-5: Core client/export paths reference a missing relationship.
+
+Evidence:
+- `backend/app/models.py:26-49`
+- `backend/app/routers/clients.py:38-40`
+- `backend/app/routers/clients.py:125-129`
+- `backend/app/services/export_service.py:29-31`
+- `backend/app/services/export_service.py:61-64`
+
+`Client` defines `travel_type_id` but does not define `travel_type = relationship("TravelType")`. The code uses `Client.travel_type` in `selectinload()` and export row generation.
+
+Impact:
+- Client list, client get, and export jobs can raise `AttributeError` or fail query construction.
+- The frontend expects travel type display data that the API does not provide.
+
+Required fix:
+- Add `travel_type = relationship("TravelType")` to `Client`.
+- Consider `clients = relationship("Client", back_populates="travel_type")` on `TravelType`.
+- Update response schemas to include a travel type projection if the frontend needs it.
+- Add real endpoint tests for list/get/export.
+
+
+P0-6: Pydantic v2 response serialization is misconfigured.
+
+Evidence:
+- `backend/app/schemas.py:80-88`
+- `backend/app/schemas.py:96-111`
+- Project pins Pydantic `2.7.1`.
+
+`ClientResponse` uses `orm_mode = True`, which is Pydantic v1 config. In Pydantic v2 it must be `model_config = ConfigDict(from_attributes=True)`. Other response models returning SQLAlchemy objects do not set `from_attributes` at all.
+
+Impact:
+- Endpoints returning ORM objects can fail response validation.
+- This affects client CRUD, travel type list/create, and user list/create.
+
+Required fix:
+- Replace v1 config and validators with Pydantic v2 equivalents.
+- Add `from_attributes=True` to all ORM-backed response schemas.
+- Add tests that call routes and assert 2xx JSON responses, not just service-level mocks.
+
+
+P0-7: Hardcoded secrets/default credentials and weak JWT defaults.
+
+Evidence:
+- `docker-compose.yml:4-7`
+- `backend/app/config.py:5`
+- `backend/app/config.py:9`
+- `.env.example:4-5`
+- `README.md:19`
+
+Problems:
+- Compose commits `POSTGRES_PASSWORD: StrongDBPass!2026`.
+- App has fallback `SECRET_KEY = dev-secret-change-in-production`.
+- Default JWT algorithm is HS256.
+- README advertises default password `admin123`.
+
+Impact:
+- If any of these values were used in a live environment, rotate them.
+- HS256 shared-secret JWTs are weaker operationally than RS256/EdDSA with public-key verification.
+
+Required fix:
+- Remove real passwords from compose; use environment variables or secrets.
+- Crash on missing production secrets.
+- Use RS256/EdDSA keypair-based JWTs or explicitly document a temporary MVP exception.
+- Remove default login from README, or make it a local-only one-time bootstrap flow.
+
+
+P0-8: PDF export has dependency and injection risk.
+
+Evidence:
+- `backend/requirements.txt` pins `weasyprint==61.1`.
+- `backend/app/services/export_service.py:87-115`
+- User-controlled fields are inserted into HTML at `backend/app/services/export_service.py:91-93`.
+
+WeasyPrint has published vulnerabilities after 61.1, including SSRF-related advisory GHSA-983w-rhvv-gwmv / CVE-2025-68616. Another advisory, CVE-2024-28184, affects 61.1 behavior around arbitrary file content in generated PDFs. The code also builds HTML with raw client fields, so an attacker who can store HTML-like values can influence PDF rendering.
+
+Impact:
+- SSRF/local file access style risks during PDF generation.
+- Generated PDFs can include unintended markup/content.
+- With auth disabled, this risk is much easier to reach.
+
+Required fix:
+- Upgrade WeasyPrint after verifying current advisories.
+- Escape all HTML values with `html.escape()`.
+- Use a restricted URL fetcher or disable external URL fetching for generated PDFs.
+- Add tests using malicious field values.
+
+References:
+- https://github.com/Kozea/WeasyPrint/security/advisories/GHSA-983w-rhvv-gwmv
+- https://nvd.nist.gov/vuln/detail/CVE-2025-68616
+- https://nvd.nist.gov/vuln/detail/CVE-2024-28184
+
+
+5. P1 FINDINGS
+--------------
+
+P1-1: Import confirm is incompatible with realistic import rows.
+
+Evidence:
+- `backend/app/services/import_parser.py:26`
+- `backend/app/services/import_parser.py:198`
+- `backend/app/schemas.py:37`
+- `backend/app/schemas.py:143-145`
+- `frontend/js/app.js:363-372`
+
+Parser maps "Travel Type" to `travel_type_id` but leaves the value as whatever the spreadsheet contains. Tests use strings like `umrah`. `ImportConfirmRequest` requires `rows: list[ClientCreate]`, and `ClientCreate.travel_type_id` is an integer.
+
+Impact:
+- Import preview can show valid rows that fail confirm with 422.
+- Users cannot import human-readable travel types unless the spreadsheet contains internal numeric IDs.
+
+Required fix:
+- Decide import contract: accept travel type code/name, resolve it to ID during validation, and store canonical integer IDs in cache.
+- Return user-facing travel type labels separately from internal IDs.
+- Test preview -> confirm with realistic CSV/XLSX fixtures.
+
+
+P1-2: Import can silently degrade or truncate data.
+
+Evidence:
+- `backend/app/services/import_service.py:49-62`
+- `backend/app/services/import_service.py:69`
+- `backend/app/services/import_service.py:73-80`
+- `frontend/js/app.js:366-372`
+
+If the DB duplicate check fails, preview continues. If Redis cache fails, preview continues. Confirm sends only `preview_data`, which is capped at 50 rows. If Redis is unavailable at confirm time, a file with more than 50 valid rows can import only the first 50 without making that failure obvious.
+
+Impact:
+- Data loss during import.
+- Duplicate detection can be bypassed during dependency failures.
+
+Required fix:
+- Treat DB duplicate check failure as a failed preview, not a warning.
+- Treat Redis cache failure as failed preview or store a signed complete payload elsewhere.
+- Confirm should use server-side cached validation data only, not trust client-sent rows as the source of truth.
+- Include `total_cached_rows` and fail if it does not match expected count.
+
+
+P1-3: Imported clients do not record `created_by`.
+
+Evidence:
+- `backend/app/routers/clients.py:183-189`
+- `backend/app/services/import_service.py:97`
+
+`current_user.id` is not passed into `commit_import`, and imported `Client` records are created without `created_by`.
+
+Impact:
+- Auditability gap.
+- Imported data cannot be traced to the actor who created it.
+
+Required fix:
+- Pass `current_user.id` into import service.
+- Add `created_by=user_id` for each imported client.
+- Add audit log writes for imports.
+
+
+P1-4: Duplicate passport protection is not transactionally safe.
+
+Evidence:
+- `backend/app/routers/clients.py:102-110`
+- `backend/app/services/import_service.py:84-99`
+- `backend/alembic/versions/001_initial.py:97-98`
+
+The code checks duplicates before insert, but there is no DB unique constraint for active/non-archived passport numbers. The partial index is not unique.
+
+Impact:
+- Two concurrent requests can insert duplicate active passport numbers.
+
+Required fix:
+- Add a partial unique index:
+  `CREATE UNIQUE INDEX uq_clients_active_passport ON clients(passport_number) WHERE NOT archived;`
+- Catch integrity errors and return 409.
+- Normalize passport numbers consistently before comparison.
+
+
+P1-5: Export is unbounded and can block the server.
+
+Evidence:
+- `backend/app/services/export_service.py:53`
+- `backend/app/services/export_service.py:71-115`
+
+The export job loads all matching clients into memory and synchronously generates CSV/XLSX/PDF. Large exports can use excessive memory/CPU and tie up async worker capacity.
+
+Impact:
+- Denial of service risk.
+- Poor production latency under real datasets.
+
+Required fix:
+- Enforce maximum export size or require async batch processing.
+- Stream CSV where possible.
+- Move CPU-heavy PDF/XLSX generation to a worker process.
+- Add progress and cancellation.
+
+
+P1-6: CSV/XLSX export is vulnerable to spreadsheet formula injection.
+
+Evidence:
+- `backend/app/services/export_service.py:61-84`
+
+User-controlled fields are written directly to CSV/XLSX. Values beginning with `=`, `+`, `-`, or `@` can execute formulas when opened in spreadsheet tools.
+
+Impact:
+- A malicious client record can weaponize exported spreadsheets.
+
+Required fix:
+- Escape/neutralize formula-leading values before CSV/XLSX output.
+- Add tests for `=HYPERLINK(...)`, `+cmd`, `-1+2`, and `@SUM(...)`.
+
+
+P1-7: Export format and filters are weakly validated.
+
+Evidence:
+- `backend/app/schemas.py:126-134`
+- `backend/app/services/export_service.py:55-58`
+- `backend/app/services/export_service.py:71-87`
+
+`format`, `header_lang`, `status`, and `gender` are free strings. Unsupported `format` values create a completed Redis job pointing at a nonexistent file.
+
+Impact:
+- Incorrect job status and confusing client behavior.
+- More input surface than needed.
+
+Required fix:
+- Use Literal/Enum types for format, language, status, and gender.
+- Reject unsupported values at request validation.
+
+
+P1-8: Input validation is not strict enough.
+
+Evidence:
+- `backend/app/schemas.py:26-40`
+- `backend/app/schemas.py:63-78`
+- `backend/app/schemas.py:90-94`
+
+Most string fields have no max lengths at the API boundary despite DB limits. `ClientUpdate` has no validators for gender, expiry date, travel date, status, or string lengths.
+
+Impact:
+- 500s from DB truncation/constraint errors.
+- Invalid data can enter through PATCH even if POST rejects it.
+
+Required fix:
+- Use Pydantic v2 `Field(max_length=...)`, enums, and validators on both create and update schemas.
+- Align API validation with DB constraints.
+
+
+P1-9: Tests do not prove production behavior.
+
+Evidence:
+- `backend/tests/conftest.py:9-13`
+
+Tests replace `app.database` with a `MagicMock` globally. This can hide database engine/session bugs, migrations, relationship errors, response serialization errors, and transaction behavior.
+
+Impact:
+- A passing test suite would not prove the API can run.
+
+Required fix:
+- Split true unit tests from integration tests.
+- Add Postgres-backed integration tests with testcontainers or docker compose.
+- Test auth, migrations, client CRUD, import preview/confirm, export status/download, and nginx path contracts.
+
+
+P1-10: Frontend admin workflows call missing backend routes.
+
+Evidence:
+- `frontend/js/app.js:453-460`
+- `frontend/js/app.js:491-509`
+- `backend/app/routers/travel_types.py:17-40`
+- `backend/app/routers/users.py:18-36`
+
+Frontend calls PATCH travel types, PATCH users, and DELETE users. Backend only supports list/create/delete travel types and list/create users.
+
+Impact:
+- Editing users/travel types and deleting users from UI silently fails.
+
+Required fix:
+- Either implement the backend endpoints with authorization and tests, or remove/disable unsupported UI actions.
+- Stop swallowing frontend errors.
+
+
+P1-11: Health check is not production-grade.
+
+Evidence:
+- `backend/app/routers/health.py:10-31`
+- `backend/app/routers/health.py:18-24`
+
+The health endpoint returns 200 even when DB/Redis are degraded, silently swallows exceptions, and does not include version, uptime, or dependency detail in the requested production format.
+
+Impact:
+- Load balancers/orchestrators may route traffic to a broken instance.
+- Operators lose failure context.
+
+Required fix:
+- Return 503 for unhealthy dependencies when core function is unavailable.
+- Log dependency failures with request_id.
+- Include version, uptime, dependency statuses.
+
+
+P1-12: Observability is incomplete.
+
+Evidence:
+- `backend/app/logger.py`
+- `backend/app/middleware/request_id.py:6-14`
+- `backend/app/main.py:23-24`
+- `backend/app/main.py:27-40`
+
+Request ID middleware exists but is not registered. Logs do not consistently include request_id, user_id, service, event, duration_ms, or structured context. Generic exception logging includes only an interpolated exception message.
+
+Impact:
+- Debugging production incidents will be slow and incomplete.
+- No audit trail for sensitive actions.
+
+Required fix:
+- Register request ID middleware.
+- Add structured log fields through middleware/contextvars.
+- Log auth failures, permission denials, imports, exports, and client mutations.
+- Wire application writes to the `audit_log` table or remove that table until implemented.
+
+
+P1-13: Deployment hardening is weak.
+
+Evidence:
+- `docker-compose.yml:34-35`
+- `docker-compose.yml:43-44`
+- `nginx/nginx.conf:2`
+- `nginx/nginx.conf:5`
+- `docker-compose.yml:3`
+- `docker-compose.yml:18`
+- `docker-compose.yml:39`
+
+Problems:
+- nginx serves HTTP only.
+- API is also exposed directly on host port 8000.
+- CSP allows all origins, inline scripts, and eval.
+- Images are tag-pinned but not digest-pinned.
+- Redis has no auth.
+- No resource limits/security options in compose.
+
+Impact:
+- Production attack surface is too large.
+- Security headers give little protection.
+
+Required fix:
+- Terminate TLS.
+- Do not expose API directly unless intentionally public and secured.
+- Replace CSP with a restrictive allowlist and remove unsafe eval/inline where possible.
+- Pin image digests for production.
+- Configure Redis auth or isolate it completely.
+- Add container resource limits and hardening options.
+
+
+6. P2/P3 FINDINGS
+-----------------
+
+P2-1: Deprecated Pydantic APIs are used.
+
+Evidence:
+- `backend/app/schemas.py:1`
+- `backend/app/schemas.py:12`
+- `backend/app/schemas.py:42`
+- `backend/app/schemas.py:48`
+- `backend/app/schemas.py:54`
+- `backend/app/routers/travel_types.py:23`
+
+Use Pydantic v2 `field_validator`, `model_validator`, `ConfigDict`, and `model_dump()`.
+
+
+P2-2: Broad exception swallowing exists in backend and frontend.
+
+Evidence:
+- Backend: `backend/app/routers/health.py:18-24`, `backend/app/services/export_service.py:137-146`, `backend/app/services/import_service.py:49-80`
+- Frontend empty catches: `frontend/js/app.js:202`, `230`, `237`, `263`, `287`, `418`, `438`, `466`, `477`, `503`, `514`
+
+Impact:
+- Failures become invisible.
+
+Required fix:
+- Surface user-safe messages in UI.
+- Log structured backend errors.
+- Only catch expected exceptions.
+
+
+P2-3: Upload validation is incomplete and stale middleware remains.
+
+Evidence:
+- `backend/app/utils/upload_validator.py:8-18`
+- `backend/app/middleware/upload.py:4-17`
+
+Upload middleware checks the old `/api/v1/clients/import` path and contains a `pass`. CSV is accepted by content type without magic/content validation.
+
+Required fix:
+- Remove stale middleware or wire it correctly.
+- Validate extension, content type, size, and parser safety at the endpoint.
+
+
+P2-4: Template downloads are placeholders.
+
+Evidence:
+- `backend/app/routers/templates.py:7-9`
+- `frontend/index.html:536-538`
+
+Frontend exposes download links, but backend returns JSON.
+
+Required fix:
+- Generate actual CSV/XLSX templates per language or remove the links.
+
+
+P2-5: Repository contains generated/stale artifacts.
+
+Evidence:
+- `git ls-files` shows tracked `__pycache__` and `.pyc` files.
+- `fix_all.sh`
+- `minadoor_super_report.md`
+
+`fix_all.sh` overwrites project files and contains stale assumptions. `minadoor_super_report.md` is generated state and contains stale code/report output. These should not be shipped with the product.
+
+Required fix:
+- Remove tracked pycache/pyc files from git.
+- Move one-off scripts/reports out of production repo or into clearly marked docs/tools.
+
+
+P2-6: Backup script is too loose for production operations.
+
+Evidence:
+- `scripts/backup.sh`
+
+Problems:
+- No `set -euo pipefail`.
+- Unquoted variables.
+- Assumes `/backups`.
+- Deletes old backups without restore verification.
+- Uses `${DB_PASS}` without checking it exists.
+
+Required fix:
+- Harden script, log backup result, verify restore periodically, and document retention.
+
+
+P2-7: README does not match reality.
+
+Evidence:
+- `README.md`
+
+Mismatches:
+- Says PostgreSQL 15; compose uses Postgres 16.
+- Says default admin login works; it does not.
+- Says JWT auth with refresh rotation; auth is disabled.
+- Says async export and templates are available; implementation is incomplete/unsafe.
+
+Required fix:
+- Update README only after code behavior is fixed.
+
+
+7. SECURITY GATE
+----------------
+
+STRIDE summary:
+
+Spoofing:
+- Fails. Any request is treated as admin due to hardcoded dependency.
+
+Tampering:
+- Fails. Client mutations are unauthenticated. No audit write path.
+
+Repudiation:
+- Fails. `audit_log` exists but is unused. Imported clients lack `created_by`.
+
+Information disclosure:
+- Fails. Unauthenticated access to client/user lists is possible. PDF rendering can be influenced by stored fields.
+
+Denial of service:
+- Fails. Export is unbounded and CPU/memory heavy. Rate limiting depends on Redis but auth is disabled and Redis failures are not handled robustly.
+
+Elevation of privilege:
+- Fails. All callers become admin.
+
+OWASP high-risk mapping:
+- Broken Access Control: present, critical.
+- Cryptographic Failures: weak defaults and committed DB password.
+- Injection: PDF HTML injection and spreadsheet formula injection risks.
+- Security Misconfiguration: permissive CSP, HTTP only, direct API exposure.
+- Vulnerable/Outdated Components: WeasyPrint and python-jose require urgent audit/upgrade.
+- Identification/Auth Failures: auth disabled, refresh validation missing.
+- Security Logging/Monitoring Failures: no request IDs in logs, no audit events.
+- SSRF: PDF renderer risk through WeasyPrint/external resource handling.
+
+
+8. DEPENDENCY NOTES
+-------------------
+
+I could not run `pip-audit` locally because it is not installed. I checked current public advisories for the most security-sensitive pinned packages.
+
+Known dependency concerns:
+- `python-jose==3.3.0` is associated with CVE-2024-33663 in public vulnerability databases. This must be audited and upgraded/replaced.
+- `weasyprint==61.1` is affected by published advisories including CVE-2024-28184, and later WeasyPrint versions also had SSRF-related advisory CVE-2025-68616. Because this app renders user-controlled database fields into PDFs, the whole PDF pipeline needs hardening, not just a version bump.
+
+References:
+- https://nvd.nist.gov/vuln/detail/CVE-2024-33663
+- https://nvd.nist.gov/vuln/detail/CVE-2024-28184
+- https://nvd.nist.gov/vuln/detail/CVE-2025-68616
+- https://github.com/Kozea/WeasyPrint/security/advisories/GHSA-983w-rhvv-gwmv
+
+Required next step:
+- Run `pip-audit -r backend/requirements.txt`.
+- Run `safety` or OSV scan.
+- Add dependency audit to CI.
+
+
+9. PRODUCTION READINESS CHECKLIST
+---------------------------------
+
+Infrastructure:
+[FAIL] TLS termination on all endpoints.
+[FAIL] API not exposed directly or exposed only intentionally.
+[FAIL] Secrets not committed.
+[FAIL] Redis protected or isolated.
+[FAIL] Docker images digest-pinned.
+[FAIL] Resource limits configured.
+[UNKNOWN] Database backups configured and tested.
+
+Security:
+[FAIL] Auth enforced.
+[FAIL] Authorization enforced per resource.
+[FAIL] OWASP checklist passed.
+[FAIL] Dependency CVE audit clean.
+[FAIL] Inputs strictly validated.
+[FAIL] User-controlled export output escaped.
+
+Observability:
+[FAIL] Structured logs include request_id/user_id/event/duration.
+[FAIL] Audit logging for sensitive actions.
+[FAIL] Health check returns correct status codes.
+[FAIL] Alerting documented/configured.
+
+Reliability:
+[FAIL] Integration tests against real Postgres/Redis.
+[FAIL] Export job isolation.
+[FAIL] Race-safe duplicate constraints.
+[FAIL] Rollback/runbook documented.
+
+Data:
+[FAIL] Import end-to-end correctness.
+[FAIL] Export formula/PDF safety.
+[FAIL] User data deletion path.
+[FAIL] Production-size migration/export/import tests.
+
+
+10. RECOMMENDED REMEDIATION ORDER
+---------------------------------
+
+Do not start by polishing UI. Fix the foundation first.
+
+Phase 1 - Stop the critical security break:
+1. Re-enable backend auth and remove frontend auto-login.
+2. Fix login contract and admin bootstrap.
+3. Remove committed DB password/default admin password claims and rotate anything used.
+4. Add missing auth tests for every protected route.
+
+Phase 2 - Make the deployed app actually route:
+1. Fix nginx proxy prefix behavior.
+2. Normalize frontend API paths.
+3. Add smoke tests against the same URLs the browser uses.
+
+Phase 3 - Fix runtime API correctness:
+1. Add `Client.travel_type` relationship.
+2. Convert all response schemas to Pydantic v2 `from_attributes=True`.
+3. Fix user/travel-type route mismatch or remove unsupported UI actions.
+4. Add real integration tests.
+
+Phase 4 - Fix import/export data safety:
+1. Resolve travel type code/name to ID during preview.
+2. Make confirm server-authoritative and fail on Redis/DB dependency errors.
+3. Add a partial unique active-passport index.
+4. Escape PDF HTML and neutralize spreadsheet formulas.
+5. Add export limits/workers/progress.
+
+Phase 5 - Production hardening:
+1. TLS and strict security headers.
+2. Docker hardening and no direct API exposure unless intentional.
+3. Request IDs, structured logs, audit events, health status codes.
+4. CI: type check, lint, tests, coverage, gitleaks, pip-audit.
+5. Remove generated/stale artifacts and tracked pycache.
+
+
+11. MINIMUM EXIT CRITERIA BEFORE SALE
+------------------------------------
+
+The product should not be sold or given to real users until all of these are true:
+
+- Unauthenticated requests to client/user/travel-type/import/export endpoints return 401.
+- Non-admin users cannot access admin routes.
+- Login works through nginx from the browser using documented credentials or bootstrap flow.
+- Client list/create/update/delete works against real Postgres.
+- Import preview -> confirm works for CSV and XLSX with realistic English/French/Arabic headers.
+- Imports cannot create duplicate active passports, even under concurrent requests.
+- Export works for CSV/XLSX/PDF and is safe against formula injection and HTML/PDF injection.
+- Health check reports DB/Redis failure with correct operational status.
+- CI runs unit, integration, security, and coverage checks.
+- Dependency audit is clean for high/critical CVEs.
+- No secrets/default production credentials are committed.
+
+
+12. FINAL ASSESSMENT
+--------------------
+
+Current state is closer to a prototype with recent patch work than a production-ready product. The most urgent issue is not small bugs; it is that the security boundary is absent. Once auth and routing are fixed, the next risk is runtime correctness: ORM response serialization and missing relationships can prevent core endpoints from working. After that, import/export needs to be treated as data integrity and security-critical code, not UI convenience.
+
+Confidence: 0.86. I have high confidence in the critical findings because they are directly visible in the source. Confidence is not 1.0 because I could not run Docker, the full Python dependency stack, migrations, or integration tests in this environment.
+
