@@ -3,7 +3,7 @@ import os
 import io
 import openpyxl
 from datetime import date
-from app.services.import_parser import HEADER_ALIASES, resolve_field, parse_csv, parse_xlsx, validate_rows, detect_intra_batch_duplicates
+from app.services.import_parser import HEADER_ALIASES, resolve_field, parse_csv, parse_xlsx, validate_rows, validate_travel_types, detect_intra_batch_duplicates
 
 
 class TestResolveField:
@@ -580,3 +580,89 @@ class TestDetectIntraBatchDuplicates:
         assert "row" in e
         assert "field" in e
         assert "message" in e
+
+
+class TestRowIndexTracking:
+    """Original spreadsheet row indices must survive all filtering steps."""
+
+    def _parsed_row(self, idx, **overrides) -> dict:
+        r = {"surname": "S", "given_name": "N", "father_name": "F",
+             "passport_number": f"P{idx:04d}", "nationality": "US",
+             "travel_type_id": "cash_umrah", "travel_date": "2027-12-01",
+             "date_of_birth": "15/03/1990", "passport_issue_date": "01/01/2020",
+             "_original_index": idx}
+        r.update(overrides)
+        return r
+
+    def test_validate_rows_preserves_original_index(self):
+        rows = [self._parsed_row(0), self._parsed_row(1, surname=""),
+                self._parsed_row(2)]
+        valid, errors = validate_rows(rows)
+        assert len(valid) == 2
+        assert valid[0]["_original_index"] == 0
+        assert valid[1]["_original_index"] == 2
+        assert errors[0]["row"] == 1
+
+    def test_validate_travel_types_uses_original_index(self):
+        rows = [self._parsed_row(0), self._parsed_row(5, travel_type_id="bogus")]
+        good, errors = validate_travel_types(rows)
+        assert len(good) == 1
+        assert errors[0]["row"] == 5
+
+    def test_detect_duplicates_uses_original_index(self):
+        rows = [self._parsed_row(3, passport_number="A1"),
+                self._parsed_row(7, passport_number="A1")]
+        unique, errors = detect_intra_batch_duplicates(rows)
+        assert errors[0]["row"] == 7
+
+
+class TestDateNormalization:
+    def test_parse_date_returns_datetime(self):
+        from app.services.import_parser import _parse_date
+        d = _parse_date("15/03/2027")
+        assert d is not None
+        assert d.strftime("%Y-%m-%d") == "2027-03-15"
+
+    def test_parse_date_iso_format(self):
+        from app.services.import_parser import _parse_date
+        d = _parse_date("2027-12-01")
+        assert d is not None
+        assert d.strftime("%Y-%m-%d") == "2027-12-01"
+
+    def test_parse_date_dd_mm_yyyy(self):
+        from app.services.import_parser import _parse_date
+        d = _parse_date("01/06/2027")
+        assert d is not None
+        assert d.strftime("%Y-%m-%d") == "2027-06-01"
+
+    def test_parse_date_mm_dd_yyyy(self):
+        from app.services.import_parser import _parse_date
+        d = _parse_date("03/15/2027")
+        assert d is not None
+        assert d.strftime("%Y-%m-%d") == "2027-03-15"
+
+    def test_normalize_dates_converts_all_date_fields(self):
+        from app.services.import_parser import normalize_row_dates
+        row = {"surname": "X", "travel_date": "01/06/2027",
+               "date_of_birth": "15/03/1990",
+               "passport_issue_date": "2020-01-01",
+               "passport_expiry": "31/12/2030"}
+        result = normalize_row_dates(row)
+        assert result["travel_date"] == "2027-06-01"
+        assert result["date_of_birth"] == "1990-03-15"
+        assert result["passport_issue_date"] == "2020-01-01"
+        assert result["passport_expiry"] == "2030-12-31"
+        assert result["surname"] == "X"
+
+    def test_normalize_dates_skips_empty_fields(self):
+        from app.services.import_parser import normalize_row_dates
+        row = {"travel_date": "2027-12-01", "notes": "hello"}
+        result = normalize_row_dates(row)
+        assert result["travel_date"] == "2027-12-01"
+        assert result["notes"] == "hello"
+
+    def test_normalize_dates_unparseable_preserves_original(self):
+        from app.services.import_parser import normalize_row_dates
+        row = {"travel_date": "not-a-date"}
+        result = normalize_row_dates(row)
+        assert result["travel_date"] == "not-a-date"

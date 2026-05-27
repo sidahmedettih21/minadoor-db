@@ -4,7 +4,7 @@ from app.dependencies import redis_client
 from app.logger import logger
 from app.models import Client
 from app.schemas import ClientCreate
-from app.services.import_parser import parse_csv, parse_xlsx, validate_rows, detect_intra_batch_duplicates
+from app.services.import_parser import parse_csv, parse_xlsx, validate_rows, validate_travel_types, detect_intra_batch_duplicates, normalize_row_dates
 from typing import List
 import json
 import uuid
@@ -20,9 +20,13 @@ async def parse_and_validate(file_content: bytes, filename: str) -> dict:
     else:
         raise ValueError(f"Unsupported file type: .{ext}")
 
+    for i, row in enumerate(parsed):
+        row["_original_index"] = i
+
     total_rows = len(parsed)
     validated, val_errors = validate_rows(parsed)
-    deduped, dup_errors = detect_intra_batch_duplicates(validated)
+    resolved, tt_errors = validate_travel_types(validated)
+    deduped, dup_errors = detect_intra_batch_duplicates(resolved)
 
     cross_batch_errors = []
     if deduped:
@@ -35,11 +39,11 @@ async def parse_and_validate(file_content: bytes, filename: str) -> dict:
                 )
                 existing_passports = set(existing.scalars().all())
                 filtered = []
-                for row in deduped:
+                for idx, row in enumerate(deduped):
                     pn = row.get("passport_number", "")
                     if pn in existing_passports:
                         cross_batch_errors.append({
-                            "row": 0,
+                            "row": row.get("_original_index", idx),
                             "field": "passport_number",
                             "message": f"Passport already exists in database: {pn}",
                         })
@@ -49,7 +53,10 @@ async def parse_and_validate(file_content: bytes, filename: str) -> dict:
         except Exception:
             logger.warning("DB unavailable, skipping cross-batch duplicate check")
 
-    all_errors = val_errors + dup_errors + cross_batch_errors
+    all_errors = val_errors + tt_errors + dup_errors + cross_batch_errors
+
+    for row in deduped:
+        normalize_row_dates(row)
 
     validation_id = str(uuid.uuid4())
     try:

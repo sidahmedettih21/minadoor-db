@@ -198,6 +198,16 @@ def _parse_date(value: str) -> datetime | None:
 REQUIRED_FIELDS = {"surname", "given_name", "father_name", "passport_number", "nationality", "travel_type_id", "travel_date"}
 DATE_FIELDS = {"travel_date", "date_of_birth", "passport_issue_date", "passport_expiry"}
 
+
+def normalize_row_dates(row: dict) -> dict:
+    for field in DATE_FIELDS:
+        val = row.get(field)
+        if val and isinstance(val, str) and val.strip():
+            parsed = _parse_date(val)
+            if parsed is not None:
+                row[field] = parsed.strftime("%Y-%m-%d")
+    return row
+
 TRAVEL_TYPE_LOOKUP: dict[str, int] = {
     "cash_umrah": 1, "cash_hajj": 2,
     "instalment_umrah": 3, "instalment_hajj": 4,
@@ -232,11 +242,15 @@ def validate_travel_types(rows: list[dict]) -> tuple[list[dict], list[dict]]:
             continue
         id_, err = resolve_travel_type_id(raw)
         if err:
-            errors.append({"row": idx, "field": "travel_type_id", "message": err})
+            errors.append({"row": row.get("_original_index", idx), "field": "travel_type_id", "message": err})
         else:
             row["travel_type_id"] = id_
             good.append(row)
     return good, errors
+
+
+def _original_or_idx(row: dict, idx: int) -> int:
+    return row.get("_original_index", idx)
 
 
 def validate_rows(rows: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -245,12 +259,13 @@ def validate_rows(rows: list[dict]) -> tuple[list[dict], list[dict]]:
 
     for idx, row in enumerate(rows):
         row_errors: list[dict] = []
+        orig = _original_or_idx(row, idx)
 
         for field in REQUIRED_FIELDS:
             val = row.get(field, "")
             if not val or (isinstance(val, str) and not val.strip()):
                 row_errors.append({
-                    "row": idx,
+                    "row": orig,
                     "field": field,
                     "message": f"{field} is required",
                 })
@@ -259,7 +274,7 @@ def validate_rows(rows: list[dict]) -> tuple[list[dict], list[dict]]:
         if gender and isinstance(gender, str) and gender.strip():
             if gender.strip().upper() not in ("M", "F"):
                 row_errors.append({
-                    "row": idx,
+                    "row": orig,
                     "field": "gender",
                     "message": "Gender must be M or F",
                 })
@@ -269,7 +284,7 @@ def validate_rows(rows: list[dict]) -> tuple[list[dict], list[dict]]:
             if val and isinstance(val, str) and val.strip():
                 if _parse_date(val) is None:
                     row_errors.append({
-                        "row": idx,
+                        "row": orig,
                         "field": field,
                         "message": f"Invalid date format for {field}",
                     })
@@ -296,7 +311,7 @@ def detect_intra_batch_duplicates(rows: list[dict]) -> tuple[list[dict], list[di
         normalized = passport.strip()
         if normalized in seen:
             errors.append({
-                "row": idx,
+                "row": row.get("_original_index", idx),
                 "field": "passport_number",
                 "message": f"Duplicate passport number: {normalized}",
             })
