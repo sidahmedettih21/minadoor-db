@@ -45,8 +45,13 @@ function app() {
     // Import
     importModalOpen: false,
     importStep: 1,
+    importLoading: false,
     importPreview: { validation_id: '', total_rows: 0, valid_rows: 0, errors: [], preview_data: [] },
     importResult: { imported_count: 0, duplicates_skipped: 0 },
+    errorDrawerOpen: false,
+    selectedError: null,
+    moreActionsOpen: false,
+    tableFlashState: null,
 
     // Export
     exportJobId: null,
@@ -325,6 +330,7 @@ function app() {
     openImportModal() {
       this.importModalOpen = true;
       this.importStep = 1;
+      this.importLoading = false;
       this.importPreview = { validation_id: '', total_rows: 0, valid_rows: 0, errors: [], preview_data: [] };
     },
 
@@ -358,25 +364,60 @@ function app() {
       this.loading = false;
     },
 
+    rowHasErrors(rowIdx) {
+      return this.importPreview.errors.some(e => e.row === rowIdx);
+    },
+    fieldHasError(rowIdx, field) {
+      return this.importPreview.errors.some(e => e.row === rowIdx && e.field === field);
+    },
+
+    openErrorDrawer(err) {
+      this.selectedError = err;
+      this.errorDrawerOpen = true;
+    },
+    closeErrorDrawer() {
+      this.errorDrawerOpen = false;
+      this.selectedError = null;
+    },
+    jumpToRow(rowIdx) {
+      const row = document.querySelector(`.preview-table [data-row-idx="${rowIdx}"]`);
+      if (row) row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      this.closeErrorDrawer();
+    },
+
     async confirmImport() {
-      this.loading = true;
+      this.importLoading = true;
       try {
-        // Build corrected rows from preview_data (user may have edited inline in a real app)
-        // Here we just send the valid preview rows
         const rows = this.importPreview.preview_data;
-        // In a real app, user edits rows inline; here we send preview
         const res = await this.api('/clients/import/confirm', {
           method: 'POST',
-          body: JSON.stringify({ rows })
+          body: JSON.stringify({
+            validation_id: this.importPreview.validation_id,
+            rows
+          })
         });
         if (res.ok) {
           this.importResult = await res.json();
+          this.tableFlashState = 'success';
+          setTimeout(() => { if (this.tableFlashState === 'success') this.tableFlashState = null; }, 600);
           this.importStep = 3;
+          this.showToast(this.t('import_success'), 'success');
+        } else {
+          const err = await res.json();
+          this.tableFlashState = 'error';
+          setTimeout(() => { if (this.tableFlashState === 'error') this.tableFlashState = null; }, 600);
+          this.showToast(err.detail || this.t('error_occurred'), 'error');
         }
       } catch (e) {
         this.showToast(this.t('error_occurred'), 'error');
       }
-      this.loading = false;
+      this.importLoading = false;
+    },
+
+    travelTypeLabel(id) {
+      if (!id || !this.travelTypes) return '';
+      const found = this.travelTypes.find(tt => String(tt.id) === String(id) || tt.code === String(id));
+      return found ? found.name : '';
     },
 
     // Export

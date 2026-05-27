@@ -537,7 +537,7 @@
             <a :href="`/api/v1/templates/fr`" class="text-xs text-primary hover:underline" x-text="t('template_fr')" download></a>
             <a :href="`/api/v1/templates/ar`" class="text-xs text-primary hover:underline" x-text="t('template_ar')" download></a>
           </div>
-          <div class="drop-zone"
+          <div x-show="!loading" class="drop-zone"
                @dragover.prevent="$el.classList.add('dragover')"
                @dragleave.prevent="$el.classList.remove('dragover')"
                @drop.prevent="handleFileDrop($event)"
@@ -547,45 +547,118 @@
             <p class="text-xs text-gray-400 mt-1" x-text="t('or_click')"></p>
             <input type="file" x-ref="fileInput" @change="handleFileSelect($event)" accept=".xlsx,.csv" class="hidden">
           </div>
+          <div x-show="loading" class="text-center py-12">
+            <svg class="animate-spin w-8 h-8 mx-auto mb-3 text-primary" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+            <p class="text-sm text-gray-500" x-text="t('processing')"></p>
+          </div>
         </div>
 
-        <!-- Step 2: Preview -->
-        <div x-show="importStep === 2">
-          <div class="mb-4 flex items-center gap-4 text-sm">
-            <span class="text-green-600 font-medium" x-text="importPreview.valid_rows + ' ' + t('valid_rows')"></span>
-            <span x-show="importPreview.errors.length > 0" class="text-red-600 font-medium" x-text="importPreview.errors.length + ' ' + t('errors')"></span>
+        <!-- Step 2: Preview (Palantir) -->
+        <div x-show="importStep === 2" class="relative">
+          <!-- Stats bar -->
+          <div class="import-stats-bar">
+            <div class="import-stat import-stat--total">
+              <span class="import-stat-value" x-text="importPreview.total_rows"></span>
+              <span class="import-stat-label" x-text="t('total_rows')"></span>
+            </div>
+            <div class="import-stat-divider"></div>
+            <div class="import-stat import-stat--valid">
+              <span class="import-stat-value" x-text="importPreview.valid_rows"></span>
+              <span class="import-stat-label" x-text="t('valid_rows')"></span>
+            </div>
+            <div class="import-stat-divider" x-show="importPreview.errors.length > 0"></div>
+            <div class="import-stat import-stat--error" x-show="importPreview.errors.length > 0">
+              <span class="import-stat-value" x-text="importPreview.errors.length"></span>
+              <span class="import-stat-label" x-text="t('errors')"></span>
+            </div>
           </div>
-          <div class="overflow-x-auto max-h-64 border border-gray-200 rounded-lg mb-4">
-            <table class="data-table">
-              <thead class="sticky top-0">
+
+          <!-- Error clickable list (opens drawer) -->
+          <div x-show="importPreview.errors.length > 0" class="import-error-bar">
+            <template x-for="(err, i) in importPreview.errors" :key="i">
+              <div class="import-error-item" @click="openErrorDrawer(err)">
+                <span class="import-error-item-row">#<span x-text="err.row + 1"></span></span>
+                <span class="import-error-item-field" x-text="t(err.field) || err.field"></span>
+                <span class="import-error-item-msg" x-text="err.message"></span>
+                <svg class="import-error-item-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+              </div>
+            </template>
+          </div>
+
+          <!-- Preview table -->
+          <div class="preview-table-wrapper"
+               :class="{'preview-table-wrapper--flash-success': tableFlashState === 'success', 'preview-table-wrapper--flash-error': tableFlashState === 'error'}">
+            <table class="preview-table">
+              <thead>
                 <tr>
-                  <th class="bg-gray-50 text-gray-700">#</th>
-                  <th class="bg-gray-50 text-gray-700" x-text="t('surname')"></th>
-                  <th class="bg-gray-50 text-gray-700" x-text="t('given_name')"></th>
-                  <th class="bg-gray-50 text-gray-700" x-text="t('passport_number')"></th>
-                  <th class="bg-gray-50 text-gray-700" x-text="t('travel_type')"></th>
-                  <th class="bg-gray-50 text-gray-700" x-text="t('travel_date')"></th>
+                  <th class="preview-th preview-th--row">#</th>
+                  <th class="preview-th" x-text="t('surname')"></th>
+                  <th class="preview-th" x-text="t('given_name')"></th>
+                  <th class="preview-th" x-text="t('passport_number')"></th>
+                  <th class="preview-th" x-text="t('travel_type')"></th>
+                  <th class="preview-th" x-text="t('travel_date')"></th>
+                  <th class="preview-th preview-th--status">Status</th>
                 </tr>
               </thead>
               <tbody>
                 <template x-for="(row, idx) in importPreview.preview_data" :key="idx">
-                  <tr>
-                    <td x-text="idx+1"></td>
-                    <td x-text="row.surname"></td>
-                    <td x-text="row.given_name"></td>
-                    <td x-text="row.passport_number"></td>
-                    <td x-text="row.travel_type"></td>
-                    <td x-text="row.travel_date"></td>
+                  <tr class="preview-row"
+                      :data-row-idx="idx"
+                      :style="'animation-delay: ' + (idx * 0.04) + 's'"
+                      :class="{'preview-row--invalid': rowHasErrors(idx)}">
+                    <td class="preview-td preview-td--row" x-text="idx + 1"></td>
+                    <td class="preview-td" :class="{'preview-td--error': fieldHasError(idx, 'surname')}" x-text="row.surname"></td>
+                    <td class="preview-td" :class="{'preview-td--error': fieldHasError(idx, 'given_name')}" x-text="row.given_name"></td>
+                    <td class="preview-td" :class="{'preview-td--error': fieldHasError(idx, 'passport_number')}" x-text="row.passport_number"></td>
+                    <td class="preview-td" :class="{'preview-td--error': fieldHasError(idx, 'travel_type_id')}" x-text="travelTypeLabel(row.travel_type_id) || row.travel_type_id"></td>
+                    <td class="preview-td" :class="{'preview-td--error': fieldHasError(idx, 'travel_date')}" x-text="row.travel_date"></td>
+                    <td class="preview-td preview-td--status">
+                      <span x-show="!rowHasErrors(idx)" class="import-badge import-badge--ok">OK</span>
+                      <span x-show="rowHasErrors(idx)" class="import-badge import-badge--err">ERR</span>
+                    </td>
                   </tr>
                 </template>
               </tbody>
             </table>
           </div>
-          <div class="flex justify-end gap-2">
-            <button @click="importStep = 1" class="btn btn-ghost" x-text="t('retry')"></button>
-            <button @click="confirmImport()" class="btn btn-primary" :disabled="importPreview.valid_rows === 0">
-              <span x-text="t('confirm_import') + ' (' + importPreview.valid_rows + ')'"></span>
+
+          <!-- Actions -->
+          <div class="import-actions">
+            <div class="relative">
+              <button @click="moreActionsOpen = !moreActionsOpen" class="btn btn-ghost-darker text-lg leading-none px-2">···</button>
+              <div x-show="moreActionsOpen" @click.outside="moreActionsOpen = false" class="import-dropdown" style="display:none;">
+                <button @click="importStep = 1; moreActionsOpen = false" class="import-dropdown-item" x-text="t('retry')"></button>
+              </div>
+            </div>
+            <button @click="confirmImport()" class="btn-import-confirm"
+                    :disabled="importPreview.valid_rows === 0 || importLoading">
+              <span x-show="!importLoading" x-text="t('confirm_import') + ' (' + importPreview.valid_rows + ')'"></span>
+              <span x-show="importLoading" x-text="t('processing')"></span>
             </button>
+          </div>
+
+          <!-- Error Drawer -->
+          <div x-show="errorDrawerOpen" class="import-drawer-backdrop" @click.self="closeErrorDrawer()" style="display:none;"></div>
+          <div x-show="errorDrawerOpen" class="import-drawer" style="display:none;">
+            <div class="import-drawer-header">
+              <span class="text-xs font-bold uppercase tracking-wider text-gray-400">Error details</span>
+              <button @click="closeErrorDrawer()" class="import-drawer-close">&times;</button>
+            </div>
+            <div class="import-drawer-body" x-show="selectedError">
+              <div class="import-drawer-field">
+                <span class="import-drawer-label">Row</span>
+                <span class="import-drawer-value font-mono" x-text="'#' + (selectedError.row + 1)"></span>
+              </div>
+              <div class="import-drawer-field">
+                <span class="import-drawer-label">Field</span>
+                <span class="import-drawer-value" x-text="t(selectedError.field) || selectedError.field"></span>
+              </div>
+              <div class="import-drawer-field">
+                <span class="import-drawer-label">Message</span>
+                <span class="import-drawer-value" x-text="selectedError.message"></span>
+              </div>
+              <button @click="jumpToRow(selectedError.row)" class="btn-import-drawer-jump">Jump to row</button>
+            </div>
           </div>
         </div>
 

@@ -53,6 +53,7 @@
   "template_ar": "Template (AR)",
   "preview": "Preview",
   "confirm_import": "Confirm Import",
+  "total_rows": "Total rows",
   "valid_rows": "Valid rows",
   "errors": "Errors",
   "processing": "Processing",
@@ -90,5 +91,7 @@
   "reset": "Reset",
   "date_from": "From",
   "date_to": "To",
-  "all": "All"
+  "all": "All",
+  "import_failed": "Import failed",
+  "row": "Row"
 }

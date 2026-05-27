@@ -53,6 +53,7 @@
   "template_ar": "قالب (AR)",
   "preview": "معاينة",
   "confirm_import": "تأكيد الاستيراد",
+  "total_rows": "إجمالي الصفوف",
   "valid_rows": "الصفوف الصالحة",
   "errors": "أخطاء",
   "processing": "جاري المعالجة",
@@ -90,5 +91,7 @@
   "reset": "إعادة تعيين",
   "date_from": "من",
   "date_to": "إلى",
-  "all": "الكل"
+  "all": "الكل",
+  "import_failed": "فشل الاستيراد",
+  "row": "صف"
 }

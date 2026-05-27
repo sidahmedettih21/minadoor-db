@@ -53,6 +53,7 @@
   "template_ar": "Modèle (AR)",
   "preview": "Aperçu",
   "confirm_import": "Confirmer l'import",
+  "total_rows": "Lignes totales",
   "valid_rows": "Lignes valides",
   "errors": "Erreurs",
   "processing": "Traitement",
@@ -90,5 +91,7 @@
   "reset": "Réinitialiser",
   "date_from": "Du",
   "date_to": "Au",
-  "all": "Tous"
+  "all": "Tous",
+  "import_failed": "Échec de l'import",
+  "row": "Ligne"
 }
